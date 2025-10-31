@@ -60,21 +60,27 @@ def get_video_info_invidious(video_id):
                 # Formatos de video
                 for stream in data.get('formatStreams', []):
                     if stream.get('type', '').startswith('video'):
+                        quality = stream.get('quality', 'unknown')
+                        # Normalizar calidad (remover 'p' si existe)
+                        if 'p' in quality:
+                            quality = quality.replace('p', '')
+                        
                         formats.append({
-                            'format_id': f"video_{stream.get('quality', 'unknown')}",
+                            'format_id': f"video_{quality}",
                             'url': stream.get('url', ''),
-                            'quality': stream.get('quality', 'unknown'),
+                            'quality': quality,
                             'type': 'video',
                             'mimeType': stream.get('type', 'video/mp4'),
-                            'has_audio': True  # Los formatos de video de invidious suelen tener audio
+                            'has_audio': True
                         })
                 
                 # Formatos de audio
                 for audio in data.get('audioStreams', []):
+                    quality = audio.get('quality', 'medium')
                     formats.append({
-                        'format_id': f"audio_{audio.get('quality', 'unknown')}",
+                        'format_id': f"audio_{quality}",
                         'url': audio.get('url', ''),
-                        'quality': audio.get('quality', 'unknown'),
+                        'quality': quality,
                         'type': 'audio',
                         'mimeType': audio.get('type', 'audio/mp4')
                     })
@@ -83,7 +89,6 @@ def get_video_info_invidious(video_id):
                 thumbnails = data.get('videoThumbnails', [])
                 thumbnail_url = ''
                 if thumbnails:
-                    # Buscar miniatura de calidad media o alta
                     for thumb in thumbnails:
                         if thumb.get('quality') in ['medium', 'high', 'standard']:
                             thumbnail_url = thumb.get('url', '')
@@ -102,6 +107,7 @@ def get_video_info_invidious(video_id):
                 }
                 
                 print(f"✅ Información obtenida correctamente de {instance}")
+                print(f"📊 Formatos disponibles: {[f['format_id'] for f in formats]}")
                 return video_info
                 
         except Exception as e:
@@ -111,7 +117,7 @@ def get_video_info_invidious(video_id):
     return None
 
 def get_basic_fallback_info(video_id):
-    """Información básica de respaldo"""
+    """Información básica de respaldo con formatos realistas"""
     return {
         'title': f"Video {video_id}",
         'description': 'Información limitada disponible - usando servicio alternativo',
@@ -120,24 +126,24 @@ def get_basic_fallback_info(video_id):
         'thumbnail': f'https://i.ytimg.com/vi/{video_id}/hqdefault.jpg',
         'formats': [
             {
-                'format_id': 'video_360p',
-                'quality': '360p',
+                'format_id': 'video_360',
+                'quality': '360',
                 'type': 'video',
                 'has_audio': True,
-                'display': 'Video 360p (compatible)'
+                'url': f'https://inv.riverside.rocks/latest_version?id={video_id}&itag=18'
             },
             {
-                'format_id': 'video_480p', 
-                'quality': '480p',
+                'format_id': 'video_720', 
+                'quality': '720',
                 'type': 'video',
                 'has_audio': True,
-                'display': 'Video 480p (compatible)'
+                'url': f'https://inv.riverside.rocks/latest_version?id={video_id}&itag=22'
             },
             {
                 'format_id': 'audio_medium',
                 'quality': 'medium',
                 'type': 'audio',
-                'display': 'Audio (calidad media)'
+                'url': f'https://inv.riverside.rocks/latest_version?id={video_id}&itag=140'
             }
         ],
         'success': True
@@ -170,26 +176,39 @@ class DownloadThread(threading.Thread):
             if not info:
                 info = get_basic_fallback_info(self.video_id)
             
-            # Determinar URL de descarga basada en el formato seleccionado
+            print(f"🔍 Buscando formato: {self.format_id}")
+            print(f"📋 Formatos disponibles: {[f['format_id'] for f in info.get('formats', [])]}")
+            
+            # Determinar URL de descarga
             download_url = None
-            format_type = self.format_id.split('_')[0]  # 'video' o 'audio'
-            target_quality = self.format_id.split('_')[1]  # '360p', '480p', etc.
+            available_formats = info.get('formats', [])
             
-            for fmt in info.get('formats', []):
-                if fmt.get('type') == format_type:
-                    if fmt.get('quality') == target_quality or target_quality == 'auto':
-                        download_url = fmt.get('url')
-                        break
+            # Buscar el formato exacto
+            for fmt in available_formats:
+                if fmt.get('format_id') == self.format_id:
+                    download_url = fmt.get('url')
+                    break
             
-            # Si no encontramos el formato específico, usar el primero disponible
+            # Si no encontramos el formato exacto, buscar cualquier formato del mismo tipo
             if not download_url:
-                for fmt in info.get('formats', []):
+                format_type = self.format_id.split('_')[0]  # 'video' o 'audio'
+                print(f"🔄 Formato exacto no encontrado, buscando cualquier formato de tipo: {format_type}")
+                
+                for fmt in available_formats:
                     if fmt.get('type') == format_type:
                         download_url = fmt.get('url')
+                        self.format_id = fmt.get('format_id')  # Actualizar al formato encontrado
+                        print(f"✅ Usando formato alternativo: {self.format_id}")
                         break
             
+            # Si aún no encontramos, usar el primer formato disponible
+            if not download_url and available_formats:
+                download_url = available_formats[0].get('url')
+                self.format_id = available_formats[0].get('format_id')
+                print(f"⚠️ Usando primer formato disponible: {self.format_id}")
+            
             if not download_url:
-                self.error = f"No se encontró el formato {self.format_id}"
+                self.error = f"No se encontró ningún formato disponible. Formatos: {[f['format_id'] for f in available_formats]}"
                 return False
             
             # Crear directorio de descargas
@@ -200,12 +219,18 @@ class DownloadThread(threading.Thread):
             # Nombre del archivo seguro
             safe_title = re.sub(r'[^\w\s-]', '', info.get('title', f'video_{self.video_id}'))
             safe_title = re.sub(r'[-\s]+', '_', safe_title)
-            file_ext = 'mp4' if format_type == 'video' else 'm4a'
+            file_ext = 'mp4' if 'video' in self.format_id else 'm4a'
             filename = f"{safe_title[:50]}_{self.format_id}.{file_ext}"
             file_path = os.path.join(download_folder, filename)
             
-            # Descargar el archivo
+            # Si la URL no es completa, construirla
+            if not download_url.startswith('http'):
+                instance = get_random_instance()
+                download_url = f"{instance}{download_url}" if download_url.startswith('/') else f"{instance}/latest_version?id={self.video_id}"
+            
             print(f"📥 Iniciando descarga desde: {download_url[:100]}...")
+            
+            # Descargar el archivo
             response = requests.get(download_url, stream=True, timeout=30)
             response.raise_for_status()
             
@@ -221,8 +246,9 @@ class DownloadThread(threading.Thread):
                             self.progress_hook(downloaded, total_size)
                         else:
                             # Progreso indefinido
+                            progress_percent = min(90, (downloaded / (1024 * 1024)) * 10)  # Estimación
                             download_progress[self.download_id] = {
-                                'progress': 50,
+                                'progress': progress_percent,
                                 'status': 'downloading',
                                 'downloaded': downloaded,
                                 'total': 0
@@ -307,11 +333,11 @@ def get_video_info():
                 audio_qualities.add(quality)
         
         # Crear opciones de video ordenadas
-        for quality in sorted(video_qualities, key=lambda x: int(x.replace('p', '')) if 'p' in str(x) else 0):
+        for quality in sorted(video_qualities, key=lambda x: int(x) if x.isdigit() else 0):
             video_formats.append({
                 'id': f"video_{quality}",
-                'display': f"🎥 Video {quality}",
-                'resolution': quality,
+                'display': f"🎥 Video {quality}p",
+                'resolution': f"{quality}p",
                 'extension': 'mp4',
                 'has_audio': True
             })
@@ -324,22 +350,26 @@ def get_video_info():
                 'extension': 'm4a'
             })
         
-        # Formatos predefinidos
-        predefined_formats = [
-            {'id': 'video_360p', 'display': '🎯 Video 360p (Recomendado)'},
-            {'id': 'video_480p', 'display': '📹 Video 480p'},
-            {'id': 'audio_medium', 'display': '🔊 Solo Audio'}
-        ]
-        
-        # Si no hay formatos, usar opciones por defecto
+        # Si no hay formatos específicos, usar opciones genéricas
         if not video_formats:
-            video_formats = [{
-                'id': 'video_360p',
-                'display': '🎥 Video (calidad disponible)',
-                'resolution': '360p',
-                'extension': 'mp4',
-                'has_audio': True
-            }]
+            video_formats = [
+                {'id': 'video_360', 'display': '🎥 Video 360p', 'resolution': '360p', 'extension': 'mp4', 'has_audio': True},
+                {'id': 'video_720', 'display': '🎥 Video 720p', 'resolution': '720p', 'extension': 'mp4', 'has_audio': True}
+            ]
+        
+        if not audio_formats:
+            audio_formats = [
+                {'id': 'audio_medium', 'display': '🎵 Audio', 'extension': 'm4a'}
+            ]
+        
+        # Formatos predefinidos basados en lo disponible
+        predefined_formats = []
+        if video_formats:
+            predefined_formats.append({'id': video_formats[0]['id'], 'display': '🎯 Mejor calidad disponible'})
+        if len(video_formats) > 1:
+            predefined_formats.append({'id': video_formats[1]['id'], 'display': '📹 Calidad media'})
+        if audio_formats:
+            predefined_formats.append({'id': audio_formats[0]['id'], 'display': '🔊 Solo audio'})
         
         return jsonify({
             'success': True,
@@ -370,15 +400,15 @@ def get_video_info():
         'video_id': video_id,
         'formats': {
             'video': [
-                {'id': 'video_360p', 'display': '🎥 Video 360p', 'resolution': '360p', 'extension': 'mp4'},
-                {'id': 'video_480p', 'display': '🎥 Video 480p', 'resolution': '480p', 'extension': 'mp4'}
+                {'id': 'video_360', 'display': '🎥 Video 360p', 'resolution': '360p', 'extension': 'mp4'},
+                {'id': 'video_720', 'display': '🎥 Video 720p', 'resolution': '720p', 'extension': 'mp4'}
             ],
             'audio': [
                 {'id': 'audio_medium', 'display': '🎵 Audio', 'extension': 'm4a'}
             ],
             'predefined': [
-                {'id': 'video_360p', 'display': '🎯 Video 360p (Recomendado)'},
-                {'id': 'video_480p', 'display': '📹 Video 480p'},
+                {'id': 'video_360', 'display': '🎯 Video 360p (Recomendado)'},
+                {'id': 'video_720', 'display': '📹 Video 720p'},
                 {'id': 'audio_medium', 'display': '🔊 Solo Audio'}
             ]
         },
@@ -386,11 +416,13 @@ def get_video_info():
         'message': '⚠️ Usando información básica - servicio alternativo'
     })
 
+# ... (mantener las demás rutas igual: start_download, progress, download, cancel_download, status)
+
 @app.route('/api/start_download', methods=['POST'])
 def start_download():
     data = request.get_json()
     url = data.get('url', '')
-    format_id = data.get('format_id', 'video_360p')
+    format_id = data.get('format_id', 'video_360')
     
     if not url:
         return jsonify({'success': False, 'error': 'URL requerida'})
@@ -461,7 +493,7 @@ def get_status():
         'status': 'active',
         'message': '✅ Servicio funcionando con Invidious',
         'instances_available': len(INVIDIOUS_INSTANCES),
-        'recommendation': 'Usa formatos 360p/480p para mejor compatibilidad'
+        'recommendation': 'El sistema buscará automáticamente formatos disponibles'
     })
 
 @app.route('/static/<path:filename>')
