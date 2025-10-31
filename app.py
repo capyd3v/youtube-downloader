@@ -32,6 +32,7 @@ def get_random_user_agent():
 
 def get_ydl_opts_base():
     """Configuración base mejorada para yt-dlp"""
+    user_agent = get_random_user_agent()
     return {
         'quiet': True,
         'no_warnings': False,
@@ -39,7 +40,7 @@ def get_ydl_opts_base():
         'extract_flat': False,
         'restrictfilenames': True,
         'http_headers': {
-            'User-Agent': get_random_user_agent(),
+            'User-Agent': user_agent,
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
             'Accept-Encoding': 'gzip, deflate, br',
@@ -141,10 +142,10 @@ class DownloadThread(threading.Thread):
             max_retries = 2
             for attempt in range(max_retries):
                 try:
+                    # Actualizar User-Agent para cada intento
+                    ydl_opts['http_headers']['User-Agent'] = get_random_user_agent()
+                    
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        # Rotar User-Agent en cada intento
-                        ydl.opts['http_headers']['User-Agent'] = get_random_user_agent()
-                        
                         info = ydl.extract_info(self.url, download=True)
                         self.filename = ydl.prepare_filename(info)
                         
@@ -204,6 +205,7 @@ def get_video_info():
         return jsonify({'success': False, 'error': 'Solo se admiten URLs de YouTube'})
     
     try:
+        # Crear nuevas opciones para cada petición con User-Agent actualizado
         ydl_opts = get_ydl_opts_base()
         ydl_opts.update({
             'skip_download': True,
@@ -211,9 +213,6 @@ def get_video_info():
         })
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Rotar User-Agent para cada petición
-            ydl.opts['http_headers']['User-Agent'] = get_random_user_agent()
-            
             video_info = ydl.extract_info(url, download=False)
         
         # Obtener miniatura de mayor calidad disponible
