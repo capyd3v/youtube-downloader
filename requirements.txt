@@ -6,7 +6,7 @@ Werkzeug==2.3.7
 yt-dlp==2024.04.09
 
 # Image processing
-Pillow==10.0.1
+
 
 # HTTP requests
 requests==2.31.0
