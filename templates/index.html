@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Downloader Web</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1><i class="fab fa-youtube"></i> YouTube Downloader</h1>
+            <p class="subtitle">Descarga videos de YouTube fácilmente</p>
+        </header>
+
+        <main class="main-content">
+            <!-- Sección de URL -->
+            <section class="url-section card">
+                <h2><i class="fas fa-link"></i> Ingresa la URL</h2>
+                <div class="input-group">
+                    <input type="text" id="urlInput" placeholder="https://www.youtube.com/watch?v=..." class="url-input">
+                    <button id="fetchBtn" class="btn btn-primary">
+                        <i class="fas fa-search"></i> Buscar Video
+                    </button>
+                </div>
+            </section>
+
+            <!-- Loading -->
+            <section id="loadingSection" class="loading-section card" style="display: none;">
+                <div class="loading-spinner">
+                    <i class="fas fa-spinner fa-spin"></i>
+                    <p>Obteniendo información del video...</p>
+                </div>
+            </section>
+
+            <!-- Información del Video -->
+            <section id="videoInfoSection" class="video-info-section card" style="display: none;">
+                <div class="video-header">
+                    <img id="videoThumbnail" class="thumbnail">
+                    <div class="video-details">
+                        <h3 id="videoTitle"></h3>
+                        <p id="videoDuration" class="meta-info"></p>
+                        <p id="videoDescription" class="description"></p>
+                    </div>
+                </div>
+
+                <!-- Selector de Formato -->
+                <div class="format-selector">
+                    <h4><i class="fas fa-download"></i> Selecciona el formato:</h4>
+                    
+                    <div class="format-tabs">
+                        <button class="tab-btn active" data-tab="predefined">Recomendados</button>
+                        <button class="tab-btn" data-tab="video">Formatos de Video</button>
+                        <button class="tab-btn" data-tab="audio">Solo Audio</button>
+                    </div>
+
+                    <div class="tab-content">
+                        <div id="predefinedTab" class="tab-pane active">
+                            <select id="predefinedSelect" class="format-select">
+                                <option value="">Selecciona una opción...</option>
+                            </select>
+                        </div>
+                        <div id="videoTab" class="tab-pane">
+                            <select id="videoSelect" class="format-select">
+                                <option value="">Selecciona calidad de video...</option>
+                            </select>
+                        </div>
+                        <div id="audioTab" class="tab-pane">
+                            <select id="audioSelect" class="format-select">
+                                <option value="">Selecciona formato de audio...</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <button id="downloadBtn" class="btn btn-download" disabled>
+                    <i class="fas fa-download"></i> Iniciar Descarga
+                </button>
+            </section>
+
+            <!-- Progreso de Descarga -->
+            <section id="downloadSection" class="download-section card" style="display: none;">
+                <h4><i class="fas fa-sync-alt"></i> Progreso de Descarga</h4>
+                
+                <div class="progress-container">
+                    <div class="progress-bar">
+                        <div id="progressFill" class="progress-fill"></div>
+                    </div>
+                    <span id="progressText" class="progress-text">0%</span>
+                </div>
+
+                <div id="progressDetails" class="progress-details">
+                    <div class="progress-info">
+                        <span id="speedText"><i class="fas fa-tachometer-alt"></i> Velocidad: --</span>
+                        <span id="etaText"><i class="fas fa-clock"></i> Tiempo restante: --</span>
+                    </div>
+                </div>
+
+                <div id="downloadActions" class="download-actions" style="display: none;">
+                    <button id="finalDownloadBtn" class="btn btn-success">
+                        <i class="fas fa-file-download"></i> Descargar Archivo
+                    </button>
+                    <button id="newDownloadBtn" class="btn btn-secondary">
+                        <i class="fas fa-plus"></i> Nueva Descarga
+                    </button>
+                </div>
+
+                <button id="cancelBtn" class="btn btn-danger">
+                    <i class="fas fa-times"></i> Cancelar Descarga
+                </button>
+            </section>
+
+            <!-- Mensajes de Error -->
+            <section id="errorSection" class="error-section card" style="display: none;">
+                <div class="error-message">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <span id="errorText"></span>
+                </div>
+            </section>
+        </main>
+
+        <footer class="footer">
+            <p>&copy; 2024 YouTube Downloader Web | Desarrollado con Flask y yt-dlp</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
