@@ -1,5 +1,18 @@
+# Core dependencies
 Flask==2.3.3
-yt-dlp==2024.04.09  # Versión específica y estable
-requests==2.31.0
-Pillow==10.0.1
 Werkzeug==2.3.7
+
+# YouTube downloading - PROBADO EN RENDER
+yt-dlp==2024.04.09
+
+# Image processing
+Pillow==10.0.1
+
+# HTTP requests
+requests==2.31.0
+urllib3==2.0.7
+
+# Build dependencies
+setuptools==65.5.0
+wheel==0.38.4
+pip==23.0.1
