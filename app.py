@@ -7,6 +7,7 @@ import tempfile
 import threading
 import time
 import re
+import random
 from werkzeug.utils import secure_filename
 import json
 
@@ -15,6 +16,52 @@ app.secret_key = 'your_secret_key_here'  # Cambia esto en producción
 
 # Almacenar progreso de descargas (en memoria, para producción usar Redis)
 download_progress = {}
+
+# Lista de User-Agents rotativos
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/120.0.0.0'
+]
+
+def get_random_user_agent():
+    return random.choice(USER_AGENTS)
+
+def get_ydl_opts_base():
+    """Configuración base mejorada para yt-dlp"""
+    return {
+        'quiet': True,
+        'no_warnings': False,
+        'ignoreerrors': False,
+        'extract_flat': False,
+        'restrictfilenames': True,
+        'http_headers': {
+            'User-Agent': get_random_user_agent(),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Cache-Control': 'max-age=0'
+        },
+        # Configuración específica para YouTube
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web'],
+                'player_skip': ['configs', 'webpage']
+            }
+        },
+        'postprocessor_args': {
+            'ffmpeg': ['-hide_banner']
+        }
+    }
 
 class DownloadThread(threading.Thread):
     def __init__(self, url, format_id, download_id):
@@ -58,77 +105,85 @@ class DownloadThread(threading.Thread):
             download_folder = os.path.join(temp_dir, 'youtube_downloads')
             os.makedirs(download_folder, exist_ok=True)
             
-            # Configuración mejorada para evitar bloqueos
-            ydl_opts = {
-                'outtmpl': os.path.join(download_folder, '%(title)s.%(ext)s'),
+            # Configuración mejorada
+            ydl_opts = get_ydl_opts_base()
+            ydl_opts.update({
+                'outtmpl': os.path.join(download_folder, '%(title).100s.%(ext)s'),
                 'progress_hooks': [self.progress_hook],
-                'quiet': True,
-                # Agregar estas opciones para evitar bloqueos
-                'extract_flat': False,
-                'ignoreerrors': False,
-                'no_warnings': False,
-                'restrictfilenames': True,
-                # Configuración de headers para parecer un navegador real
-                'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                    'Accept-Language': 'en-us,en;q=0.5',
-                    'Accept-Encoding': 'gzip,deflate',
-                    'Accept-Charset': 'ISO-8859-1,utf-8;q=0.7,*;q=0.7',
-                    'Connection': 'keep-alive',
-                }
-            }
+            })
             
             # Configurar formato según selección
             selected_format = self.format_id
             
-            # Verificar si es un formato que incluye audio
-            if '+' in selected_format or selected_format == 'best':
+            # Estrategias de formato mejoradas
+            if selected_format == 'best':
+                ydl_opts['format'] = 'best[height<=1080]'
+            elif selected_format == 'worst':
+                ydl_opts['format'] = 'worst'
+            elif selected_format == 'bestvideo+bestaudio':
+                ydl_opts['format'] = 'bestvideo[height<=1080]+bestaudio'
+                ydl_opts['merge_output_format'] = 'mp4'
+            elif '+' in selected_format:
                 ydl_opts['format'] = selected_format
             else:
-                # Combinar video seleccionado con mejor audio
+                # Para formatos individuales, combinar con mejor audio
                 ydl_opts['format'] = f'{selected_format}+bestaudio'
+                ydl_opts['merge_output_format'] = 'mp4'
+            
+            # Agregar postprocessors para combinar formatos
+            if '+' in ydl_opts.get('format', ''):
                 ydl_opts['postprocessors'] = [{
                     'key': 'FFmpegVideoConvertor',
                     'preferedformat': 'mp4',
                 }]
             
-            # Intentar diferentes métodos de extracción
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # Agregar manejo de errores específico para YouTube
+            # Intentar con diferentes configuraciones
+            max_retries = 2
+            for attempt in range(max_retries):
                 try:
-                    info = ydl.extract_info(self.url, download=True)
-                    self.filename = ydl.prepare_filename(info)
-                    
-                    # Actualizar progreso a completado
-                    download_progress[self.download_id] = {
-                        'progress': 100,
-                        'status': 'completed',
-                        'filename': os.path.basename(self.filename),
-                        'title': info.get('title', 'video')
-                    }
-                    
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        # Rotar User-Agent en cada intento
+                        ydl.opts['http_headers']['User-Agent'] = get_random_user_agent()
+                        
+                        info = ydl.extract_info(self.url, download=True)
+                        self.filename = ydl.prepare_filename(info)
+                        
+                        # Actualizar progreso a completado
+                        download_progress[self.download_id] = {
+                            'progress': 100,
+                            'status': 'completed',
+                            'filename': os.path.basename(self.filename),
+                            'title': info.get('title', 'video')
+                        }
+                        break  # Salir del loop si tiene éxito
+                        
                 except yt_dlp.DownloadError as e:
-                    # Si falla, intentar con método alternativo
-                    if "Sign in to confirm you're not a bot" in str(e):
-                        self.error = "YouTube requiere verificación. Intenta con otro video o espera unos minutos."
-                    elif "Video unavailable" in str(e):
-                        self.error = "Video no disponible o restringido."
+                    if attempt < max_retries - 1:
+                        # Cambiar estrategia en el segundo intento
+                        if 'best' in ydl_opts.get('format', ''):
+                            ydl_opts['format'] = 'worst'
+                        time.sleep(2)  # Esperar antes de reintentar
+                        continue
                     else:
-                        self.error = f"Error de descarga: {str(e)}"
-                    
-                    download_progress[self.download_id] = {
-                        'progress': 0,
-                        'status': 'error',
-                        'error': self.error
-                    }
+                        raise e
                 
         except Exception as e:
-            self.error = str(e)
+            error_msg = str(e)
+            if "Sign in" in error_msg or "confirm you're not a bot" in error_msg:
+                self.error = "YouTube ha bloqueado la descarga. Esto es común en servidores cloud. Intenta con un video menos popular o espera unos minutos."
+            elif "Video unavailable" in error_msg:
+                self.error = "Video no disponible en tu región o restringido."
+            elif "Private video" in error_msg:
+                self.error = "Este video es privado."
+            elif "Copyright" in error_msg:
+                self.error = "El video tiene restricciones de copyright."
+            else:
+                self.error = f"Error: {error_msg}"
+            
             download_progress[self.download_id] = {
                 'progress': 0,
                 'status': 'error',
-                'error': str(e)
+                'error': self.error
             }
 
 @app.route('/')
@@ -144,21 +199,21 @@ def get_video_info():
     if not url:
         return jsonify({'success': False, 'error': 'URL requerida'})
     
+    # Validar que sea una URL de YouTube
+    if 'youtube.com' not in url and 'youtu.be' not in url:
+        return jsonify({'success': False, 'error': 'Solo se admiten URLs de YouTube'})
+    
     try:
-        ydl_opts = {
-            'quiet': True, 
+        ydl_opts = get_ydl_opts_base()
+        ydl_opts.update({
             'skip_download': True,
-            'no_warnings': True,
-            # Agregar headers para evitar bloqueos
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            },
             'extract_flat': False,
-            'ignoreerrors': False,
-        }
+        })
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # Rotar User-Agent para cada petición
+            ydl.opts['http_headers']['User-Agent'] = get_random_user_agent()
+            
             video_info = ydl.extract_info(url, download=False)
         
         # Obtener miniatura de mayor calidad disponible
@@ -224,11 +279,11 @@ def get_video_info():
         
         video_formats.sort(key=lambda x: get_resolution_value(x['resolution']), reverse=True)
         
-        # Agregar opciones predefinidas
+        # Agregar opciones predefinidas optimizadas
         predefined_formats = [
-            {'id': 'best', 'display': '🎯 Mejor calidad (video+audio)'},
-            {'id': 'worst', 'display': '📉 Peor calidad (video+audio)'},
-            {'id': 'bestvideo+bestaudio', 'display': '🏆 Mejor video + mejor audio (combinar)'}
+            {'id': 'best', 'display': '🎯 Mejor calidad (hasta 1080p)'},
+            {'id': 'worst', 'display': '📉 Calidad más baja (para evitar bloqueos)'},
+            {'id': 'bestvideo+bestaudio', 'display': '🏆 Mejor video + mejor audio'}
         ]
         
         return jsonify({
@@ -246,10 +301,15 @@ def get_video_info():
         
     except yt_dlp.DownloadError as e:
         error_msg = str(e)
-        if "Sign in" in error_msg:
-            return jsonify({'success': False, 'error': 'YouTube requiere verificación. Intenta con otro video.'})
+        if "Sign in" in error_msg or "confirm you're not a bot" in error_msg:
+            return jsonify({
+                'success': False, 
+                'error': 'YouTube está bloqueando las descargas desde este servidor. Intenta con videos menos populares o formatos de menor calidad.'
+            })
         elif "Video unavailable" in error_msg:
             return jsonify({'success': False, 'error': 'Video no disponible o restringido.'})
+        elif "Private video" in error_msg:
+            return jsonify({'success': False, 'error': 'Este video es privado.'})
         else:
             return jsonify({'success': False, 'error': f'Error al obtener información: {error_msg}'})
     except Exception as e:
@@ -324,6 +384,18 @@ def cancel_download(download_id):
         del download_progress[download_id]
     
     return jsonify({'success': True, 'message': 'Descarga cancelada'})
+
+@app.route('/api/tips')
+def get_tips():
+    """Endpoint para obtener tips de uso"""
+    return jsonify({
+        'tips': [
+            "Usa formatos de menor calidad para videos populares (menos bloqueos)",
+            "Los videos menos vistos tienen menos restricciones",
+            "Si falla, espera unos minutos y reintenta",
+            "Evita videos con copyright estricto"
+        ]
+    })
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
