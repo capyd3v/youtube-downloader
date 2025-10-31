@@ -58,10 +58,25 @@ class DownloadThread(threading.Thread):
             download_folder = os.path.join(temp_dir, 'youtube_downloads')
             os.makedirs(download_folder, exist_ok=True)
             
+            # Configuración mejorada para evitar bloqueos
             ydl_opts = {
                 'outtmpl': os.path.join(download_folder, '%(title)s.%(ext)s'),
                 'progress_hooks': [self.progress_hook],
                 'quiet': True,
+                # Agregar estas opciones para evitar bloqueos
+                'extract_flat': False,
+                'ignoreerrors': False,
+                'no_warnings': False,
+                'restrictfilenames': True,
+                # Configuración de headers para parecer un navegador real
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-us,en;q=0.5',
+                    'Accept-Encoding': 'gzip,deflate',
+                    'Accept-Charset': 'ISO-8859-1,utf-8;q=0.7,*;q=0.7',
+                    'Connection': 'keep-alive',
+                }
             }
             
             # Configurar formato según selección
@@ -78,17 +93,35 @@ class DownloadThread(threading.Thread):
                     'preferedformat': 'mp4',
                 }]
             
+            # Intentar diferentes métodos de extracción
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(self.url, download=True)
-                self.filename = ydl.prepare_filename(info)
-                
-                # Actualizar progreso a completado
-                download_progress[self.download_id] = {
-                    'progress': 100,
-                    'status': 'completed',
-                    'filename': os.path.basename(self.filename),
-                    'title': info.get('title', 'video')
-                }
+                # Agregar manejo de errores específico para YouTube
+                try:
+                    info = ydl.extract_info(self.url, download=True)
+                    self.filename = ydl.prepare_filename(info)
+                    
+                    # Actualizar progreso a completado
+                    download_progress[self.download_id] = {
+                        'progress': 100,
+                        'status': 'completed',
+                        'filename': os.path.basename(self.filename),
+                        'title': info.get('title', 'video')
+                    }
+                    
+                except yt_dlp.DownloadError as e:
+                    # Si falla, intentar con método alternativo
+                    if "Sign in to confirm you're not a bot" in str(e):
+                        self.error = "YouTube requiere verificación. Intenta con otro video o espera unos minutos."
+                    elif "Video unavailable" in str(e):
+                        self.error = "Video no disponible o restringido."
+                    else:
+                        self.error = f"Error de descarga: {str(e)}"
+                    
+                    download_progress[self.download_id] = {
+                        'progress': 0,
+                        'status': 'error',
+                        'error': self.error
+                    }
                 
         except Exception as e:
             self.error = str(e)
@@ -115,7 +148,14 @@ def get_video_info():
         ydl_opts = {
             'quiet': True, 
             'skip_download': True,
-            'no_warnings': True
+            'no_warnings': True,
+            # Agregar headers para evitar bloqueos
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            },
+            'extract_flat': False,
+            'ignoreerrors': False,
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -204,6 +244,14 @@ def get_video_info():
             }
         })
         
+    except yt_dlp.DownloadError as e:
+        error_msg = str(e)
+        if "Sign in" in error_msg:
+            return jsonify({'success': False, 'error': 'YouTube requiere verificación. Intenta con otro video.'})
+        elif "Video unavailable" in error_msg:
+            return jsonify({'success': False, 'error': 'Video no disponible o restringido.'})
+        else:
+            return jsonify({'success': False, 'error': f'Error al obtener información: {error_msg}'})
     except Exception as e:
         return jsonify({'success': False, 'error': f'Error: {str(e)}'})
 
