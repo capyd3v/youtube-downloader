@@ -1,38 +1,27 @@
 import os
-import yt_dlp
 import requests
-from flask import Flask, render_template, request, jsonify, send_file, session
-from io import BytesIO
+from flask import Flask, render_template, request, jsonify, send_file
 import tempfile
 import threading
 import time
 import re
 import random
-import urllib.parse
 import json
-from urllib.request import urlopen
-import xml.etree.ElementTree as ET
+from urllib.parse import quote
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key_here'
 
 download_progress = {}
 
-# Múltiples servicios alternativos
+# Instancias de Invidious (servicios alternativos)
 INVIDIOUS_INSTANCES = [
     'https://inv.riverside.rocks',
-    'https://invidious.snopyta.org', 
+    'https://vid.puffyan.us',
+    'https://invidious.snopyta.org',
     'https://yewtu.be',
     'https://inv.tux.pizza',
-    'https://invidious.osi.kr',
-    'https://vid.puffyan.us'
-]
-
-# APIs alternativas
-ALTERNATIVE_APIS = [
-    'https://noembed.com/embed?url=',
-    'https://www.youtube.com/oembed?url=',
-    'https://api.spencerwoo.com/ytb/video/'
+    'https://invidious.osi.kr'
 ]
 
 def get_random_instance():
@@ -43,8 +32,7 @@ def extract_video_id(url):
     patterns = [
         r'(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&?\n]+)',
         r'youtube\.com\/embed\/([^&?\n]+)',
-        r'youtube\.com\/v\/([^&?\n]+)',
-        r'youtube\.com\/watch\?.+&v=([^&?\n]+)'
+        r'youtube\.com\/v\/([^&?\n]+)'
     ]
     
     for pattern in patterns:
@@ -53,36 +41,14 @@ def extract_video_id(url):
             return match.group(1)
     return None
 
-def get_basic_info_from_oembed(url):
-    """Obtener información básica usando oEmbed"""
-    try:
-        for api_base in ALTERNATIVE_APIS:
-            try:
-                api_url = f"{api_base}{urllib.parse.quote(url)}"
-                if 'noembed' in api_base:
-                    api_url += '&format=json'
-                
-                response = requests.get(api_url, timeout=10)
-                if response.status_code == 200:
-                    data = response.json()
-                    return {
-                        'title': data.get('title', 'Sin título'),
-                        'thumbnail_url': data.get('thumbnail_url', ''),
-                        'author_name': data.get('author_name', ''),
-                        'success': True
-                    }
-            except:
-                continue
-    except:
-        pass
-    return None
-
-def get_invidious_info(video_id):
-    """Obtener información completa de Invidious"""
+def get_video_info_invidious(video_id):
+    """Obtener información del video usando Invidious"""
     for attempt in range(3):
         try:
             instance = get_random_instance()
             api_url = f"{instance}/api/v1/videos/{video_id}"
+            
+            print(f"Intentando con instancia: {instance}")
             
             response = requests.get(api_url, timeout=15)
             if response.status_code == 200:
@@ -99,7 +65,8 @@ def get_invidious_info(video_id):
                             'url': stream.get('url', ''),
                             'quality': stream.get('quality', 'unknown'),
                             'type': 'video',
-                            'mimeType': stream.get('type', 'video/mp4')
+                            'mimeType': stream.get('type', 'video/mp4'),
+                            'has_audio': True  # Los formatos de video de invidious suelen tener audio
                         })
                 
                 # Formatos de audio
@@ -112,62 +79,76 @@ def get_invidious_info(video_id):
                         'mimeType': audio.get('type', 'audio/mp4')
                     })
                 
-                # Información básica del video
+                # Obtener la mejor miniatura
+                thumbnails = data.get('videoThumbnails', [])
+                thumbnail_url = ''
+                if thumbnails:
+                    # Buscar miniatura de calidad media o alta
+                    for thumb in thumbnails:
+                        if thumb.get('quality') in ['medium', 'high', 'standard']:
+                            thumbnail_url = thumb.get('url', '')
+                            break
+                    if not thumbnail_url and thumbnails:
+                        thumbnail_url = thumbnails[0].get('url', '')
+                
                 video_info = {
                     'title': data.get('title', 'Sin título'),
                     'description': data.get('description', ''),
                     'duration': data.get('lengthSeconds', 0),
                     'viewCount': data.get('viewCount', 0),
-                    'thumbnails': data.get('videoThumbnails', []),
+                    'thumbnail': thumbnail_url,
                     'formats': formats,
                     'success': True
                 }
                 
+                print(f"✅ Información obtenida correctamente de {instance}")
                 return video_info
                 
         except Exception as e:
-            print(f"Instancia {instance} falló: {e}")
+            print(f"❌ Instancia {instance} falló: {str(e)}")
             continue
     
     return None
 
-def get_youtube_dl_info_with_proxy(url):
-    """Intentar con yt-dlp usando configuraciones extremas"""
-    try:
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'ignoreerrors': True,
-            'extract_flat': False,
-            'restrictfilenames': True,
-            'socket_timeout': 30,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android_embedded', 'ios', 'web_mobile'],
-                    'player_skip': ['configs', 'webpage', 'js'],
-                }
+def get_basic_fallback_info(video_id):
+    """Información básica de respaldo"""
+    return {
+        'title': f"Video {video_id}",
+        'description': 'Información limitada disponible - usando servicio alternativo',
+        'duration': 0,
+        'viewCount': 0,
+        'thumbnail': f'https://i.ytimg.com/vi/{video_id}/hqdefault.jpg',
+        'formats': [
+            {
+                'format_id': 'video_360p',
+                'quality': '360p',
+                'type': 'video',
+                'has_audio': True,
+                'display': 'Video 360p (compatible)'
             },
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S901B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
-                'Accept': '*/*',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Referer': 'https://www.youtube.com/',
-                'Origin': 'https://www.youtube.com',
+            {
+                'format_id': 'video_480p', 
+                'quality': '480p',
+                'type': 'video',
+                'has_audio': True,
+                'display': 'Video 480p (compatible)'
+            },
+            {
+                'format_id': 'audio_medium',
+                'quality': 'medium',
+                'type': 'audio',
+                'display': 'Audio (calidad media)'
             }
-        }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            return ydl.extract_info(url, download=False)
-    except:
-        return None
+        ],
+        'success': True
+    }
 
 class DownloadThread(threading.Thread):
-    def __init__(self, video_id, format_type, download_id, service_instance=None):
+    def __init__(self, video_id, format_id, download_id):
         threading.Thread.__init__(self)
         self.video_id = video_id
-        self.format_type = format_type
+        self.format_id = format_id
         self.download_id = download_id
-        self.service_instance = service_instance or get_random_instance()
         self.filename = None
         self.error = None
 
@@ -184,30 +165,31 @@ class DownloadThread(threading.Thread):
     def download_from_invidious(self):
         """Descargar usando Invidious"""
         try:
-            # Obtener información del video primero
-            info = get_invidious_info(self.video_id)
+            # Obtener información del video
+            info = get_video_info_invidious(self.video_id)
             if not info:
-                return False
+                info = get_basic_fallback_info(self.video_id)
             
-            # Determinar URL de descarga
+            # Determinar URL de descarga basada en el formato seleccionado
             download_url = None
+            format_type = self.format_id.split('_')[0]  # 'video' o 'audio'
+            target_quality = self.format_id.split('_')[1]  # '360p', '480p', etc.
+            
             for fmt in info.get('formats', []):
-                if self.format_type == 'video' and fmt['type'] == 'video':
-                    if fmt['quality'] in ['360p', '480p']:  # Priorizar calidades bajas
-                        download_url = fmt['url']
+                if fmt.get('type') == format_type:
+                    if fmt.get('quality') == target_quality or target_quality == 'auto':
+                        download_url = fmt.get('url')
                         break
-                elif self.format_type == 'audio' and fmt['type'] == 'audio':
-                    download_url = fmt['url']
-                    break
             
+            # Si no encontramos el formato específico, usar el primero disponible
             if not download_url:
-                # Si no encontramos el formato específico, usar el primero disponible
                 for fmt in info.get('formats', []):
-                    if fmt['type'] == self.format_type:
-                        download_url = fmt['url']
+                    if fmt.get('type') == format_type:
+                        download_url = fmt.get('url')
                         break
             
             if not download_url:
+                self.error = f"No se encontró el formato {self.format_id}"
                 return False
             
             # Crear directorio de descargas
@@ -215,35 +197,54 @@ class DownloadThread(threading.Thread):
             download_folder = os.path.join(temp_dir, 'youtube_downloads')
             os.makedirs(download_folder, exist_ok=True)
             
-            # Nombre del archivo
-            safe_title = re.sub(r'[^\w\s-]', '', info['title'])
+            # Nombre del archivo seguro
+            safe_title = re.sub(r'[^\w\s-]', '', info.get('title', f'video_{self.video_id}'))
             safe_title = re.sub(r'[-\s]+', '_', safe_title)
-            file_ext = 'mp4' if self.format_type == 'video' else 'm4a'
-            filename = f"{safe_title[:50]}.{file_ext}"
+            file_ext = 'mp4' if format_type == 'video' else 'm4a'
+            filename = f"{safe_title[:50]}_{self.format_id}.{file_ext}"
             file_path = os.path.join(download_folder, filename)
             
             # Descargar el archivo
+            print(f"📥 Iniciando descarga desde: {download_url[:100]}...")
             response = requests.get(download_url, stream=True, timeout=30)
+            response.raise_for_status()
+            
             total_size = int(response.headers.get('content-length', 0))
+            downloaded = 0
             
             with open(file_path, 'wb') as f:
-                downloaded = 0
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
-                        self.progress_hook(downloaded, total_size)
+                        if total_size > 0:
+                            self.progress_hook(downloaded, total_size)
+                        else:
+                            # Progreso indefinido
+                            download_progress[self.download_id] = {
+                                'progress': 50,
+                                'status': 'downloading',
+                                'downloaded': downloaded,
+                                'total': 0
+                            }
             
             self.filename = filename
+            print(f"✅ Descarga completada: {filename}")
             return True
             
         except Exception as e:
-            self.error = f"Error en descarga Invidious: {str(e)}"
+            self.error = f"Error en descarga: {str(e)}"
+            print(f"❌ Error en descarga: {str(e)}")
             return False
 
     def run(self):
         try:
-            # Siempre usar Invidious para descargar
+            download_progress[self.download_id] = {
+                'progress': 0,
+                'status': 'starting',
+                'error': None
+            }
+            
             success = self.download_from_invidious()
             
             if success:
@@ -254,8 +255,7 @@ class DownloadThread(threading.Thread):
                     'title': 'video_descargado'
                 }
             else:
-                self.error = self.error or "No se pudo descargar el video"
-                raise Exception(self.error)
+                raise Exception(self.error or "No se pudo descargar el video")
                 
         except Exception as e:
             error_msg = str(e)
@@ -273,7 +273,7 @@ def index():
 
 @app.route('/api/video_info', methods=['POST'])
 def get_video_info():
-    """Obtener información del video usando métodos alternativos"""
+    """Obtener información del video usando Invidious"""
     data = request.get_json()
     url = data.get('url', '').strip()
     
@@ -284,93 +284,106 @@ def get_video_info():
     if not video_id:
         return jsonify({'success': False, 'error': 'URL de YouTube no válida'})
     
-    # Método 1: Usar Invidious (principal)
-    invidious_info = get_invidious_info(video_id)
+    print(f"🎬 Obteniendo información para video ID: {video_id}")
+    
+    # Método principal: Invidious
+    invidious_info = get_video_info_invidious(video_id)
     if invidious_info:
-        # Procesar formatos para la interfaz
+        # Procesar formatos para el frontend
         video_formats = []
         audio_formats = []
+        predefined_formats = []
         
-        # Agrupar por calidad
+        # Agrupar calidades de video
         video_qualities = set()
-        for fmt in invidious_info.get('formats', []):
-            if fmt['type'] == 'video':
-                video_qualities.add(fmt['quality'])
-            elif fmt['type'] == 'audio':
-                audio_formats.append({
-                    'id': f"audio_{fmt['quality']}",
-                    'display': f"🎵 Audio ({fmt['quality']})",
-                    'type': 'audio'
-                })
+        audio_qualities = set()
         
-        # Crear opciones de video
-        for quality in sorted(video_qualities, key=lambda x: int(x.replace('p', '')) if 'p' in x else 0):
+        for fmt in invidious_info.get('formats', []):
+            if fmt.get('type') == 'video':
+                quality = fmt.get('quality', 'unknown')
+                video_qualities.add(quality)
+            elif fmt.get('type') == 'audio':
+                quality = fmt.get('quality', 'unknown')
+                audio_qualities.add(quality)
+        
+        # Crear opciones de video ordenadas
+        for quality in sorted(video_qualities, key=lambda x: int(x.replace('p', '')) if 'p' in str(x) else 0):
             video_formats.append({
                 'id': f"video_{quality}",
                 'display': f"🎥 Video {quality}",
-                'type': 'video',
-                'quality': quality
+                'resolution': quality,
+                'extension': 'mp4',
+                'has_audio': True
             })
         
-        # Obtener miniatura
-        thumbnail = ''
-        if invidious_info.get('thumbnails'):
-            # Buscar miniatura de calidad media
-            for thumb in invidious_info['thumbnails']:
-                if thumb.get('quality', '') == 'medium':
-                    thumbnail = thumb.get('url', '')
-                    break
-            if not thumbnail and invidious_info['thumbnails']:
-                thumbnail = invidious_info['thumbnails'][0].get('url', '')
+        # Crear opciones de audio
+        for quality in sorted(audio_qualities):
+            audio_formats.append({
+                'id': f"audio_{quality}",
+                'display': f"🎵 Audio ({quality})",
+                'extension': 'm4a'
+            })
+        
+        # Formatos predefinidos
+        predefined_formats = [
+            {'id': 'video_360p', 'display': '🎯 Video 360p (Recomendado)'},
+            {'id': 'video_480p', 'display': '📹 Video 480p'},
+            {'id': 'audio_medium', 'display': '🔊 Solo Audio'}
+        ]
+        
+        # Si no hay formatos, usar opciones por defecto
+        if not video_formats:
+            video_formats = [{
+                'id': 'video_360p',
+                'display': '🎥 Video (calidad disponible)',
+                'resolution': '360p',
+                'extension': 'mp4',
+                'has_audio': True
+            }]
         
         return jsonify({
             'success': True,
-            'title': invidious_info['title'],
-            'duration': invidious_info['duration'],
-            'thumbnail': thumbnail,
-            'description': invidious_info['description'][:200] + '...' if invidious_info['description'] else 'Sin descripción',
+            'title': invidious_info.get('title', 'Sin título'),
+            'duration': invidious_info.get('duration', 0),
+            'thumbnail': invidious_info.get('thumbnail', ''),
+            'description': str(invidious_info.get('description', ''))[:200] + '...',
             'video_id': video_id,
             'view_count': invidious_info.get('viewCount', 0),
             'formats': {
                 'video': video_formats,
-                'audio': audio_formats
+                'audio': audio_formats,
+                'predefined': predefined_formats
             },
             'method': 'invidious',
-            'message': '✅ Usando servicio alternativo (Invidious)'
+            'message': '✅ Información obtenida mediante servicio alternativo'
         })
     
-    # Método 2: Información básica via oEmbed
-    basic_info = get_basic_info_from_oembed(url)
-    if basic_info:
-        return jsonify({
-            'success': True,
-            'title': basic_info['title'],
-            'duration': 0,
-            'thumbnail': basic_info['thumbnail_url'],
-            'description': f"Video de {basic_info.get('author_name', 'YouTube')}",
-            'video_id': video_id,
-            'formats': {
-                'video': [{'id': 'video_default', 'display': '🎥 Video (calidad disponible)'}],
-                'audio': [{'id': 'audio_default', 'display': '🎵 Audio'}]
-            },
-            'method': 'oembed',
-            'message': '⚠️ Información limitada disponible'
-        })
+    # Método de respaldo
+    fallback_info = get_basic_fallback_info(video_id)
     
-    # Método 3: Información mínima con solo el ID
     return jsonify({
         'success': True,
-        'title': f"Video {video_id}",
-        'duration': 0,
-        'thumbnail': f'https://i.ytimg.com/vi/{video_id}/hqdefault.jpg',
-        'description': 'Información no disponible debido a restricciones de YouTube',
+        'title': fallback_info.get('title', 'Sin título'),
+        'duration': fallback_info.get('duration', 0),
+        'thumbnail': fallback_info.get('thumbnail', ''),
+        'description': fallback_info.get('description', ''),
         'video_id': video_id,
         'formats': {
-            'video': [{'id': 'video_auto', 'display': '🎥 Intentar descargar video'}],
-            'audio': [{'id': 'audio_auto', 'display': '🎵 Intentar descargar audio'}]
+            'video': [
+                {'id': 'video_360p', 'display': '🎥 Video 360p', 'resolution': '360p', 'extension': 'mp4'},
+                {'id': 'video_480p', 'display': '🎥 Video 480p', 'resolution': '480p', 'extension': 'mp4'}
+            ],
+            'audio': [
+                {'id': 'audio_medium', 'display': '🎵 Audio', 'extension': 'm4a'}
+            ],
+            'predefined': [
+                {'id': 'video_360p', 'display': '🎯 Video 360p (Recomendado)'},
+                {'id': 'video_480p', 'display': '📹 Video 480p'},
+                {'id': 'audio_medium', 'display': '🔊 Solo Audio'}
+            ]
         },
         'method': 'fallback',
-        'message': '⚠️ Solo descarga disponible (sin información detallada)'
+        'message': '⚠️ Usando información básica - servicio alternativo'
     })
 
 @app.route('/api/start_download', methods=['POST'])
@@ -386,14 +399,11 @@ def start_download():
     if not video_id:
         return jsonify({'success': False, 'error': 'URL de YouTube no válida'})
     
-    # Determinar tipo de formato
-    format_type = 'video'
-    if format_id.startswith('audio'):
-        format_type = 'audio'
-    
     download_id = f"dl_{int(time.time())}_{video_id}"
     
-    download_thread = DownloadThread(video_id, format_type, download_id)
+    print(f"🚀 Iniciando descarga: {video_id} con formato {format_id}")
+    
+    download_thread = DownloadThread(video_id, format_id, download_id)
     download_thread.start()
     
     return jsonify({
@@ -407,7 +417,8 @@ def start_download():
 def get_progress(download_id):
     progress = download_progress.get(download_id, {
         'progress': 0,
-        'status': 'unknown'
+        'status': 'unknown',
+        'error': None
     })
     return jsonify(progress)
 
@@ -446,26 +457,13 @@ def cancel_download(download_id):
 
 @app.route('/api/status')
 def get_status():
-    """Endpoint para verificar el estado del servicio"""
     return jsonify({
         'status': 'active',
-        'message': '✅ Servicio funcionando con métodos alternativos',
-        'supported_methods': ['invidious', 'oembed', 'fallback'],
-        'recommendation': 'Usa videos menos populares para mejor resultado'
+        'message': '✅ Servicio funcionando con Invidious',
+        'instances_available': len(INVIDIOUS_INSTANCES),
+        'recommendation': 'Usa formatos 360p/480p para mejor compatibilidad'
     })
 
-@app.route('/api/tips')
-def get_tips():
-    return jsonify({
-        'tips': [
-            "🎯 Funciona MEJOR con videos educativos/tutoriales",
-            "📹 Videos con menos de 50,000 vistas funcionan mejor", 
-            "⏰ Videos de 2+ años de antigüedad tienen menos bloqueos",
-            "🚀 Usa calidad 360p o 480p para mayor éxito",
-            "💡 Canales pequeños = menos restricciones",
-            "🔧 Si falla, intenta con otro video"
-        ]
-    })
 @app.route('/static/<path:filename>')
 def serve_static(filename):
     return send_from_directory('static', filename)
