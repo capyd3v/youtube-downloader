@@ -1,5 +1,5 @@
 Flask==2.3.3
-yt-dlp==2023.11.16
+yt-dlp==2024.04.09  # Versión específica y estable
 requests==2.31.0
 Pillow==10.0.1
 Werkzeug==2.3.7
