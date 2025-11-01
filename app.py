@@ -5,25 +5,14 @@ import tempfile
 import threading
 import time
 import re
-import random
+from pytube import YouTube
+from pytube.exceptions import VideoUnavailable, AgeRestrictedError
 import json
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key_here'
 
 download_progress = {}
-
-# Instancias de Invidious funcionales
-INVIDIOUS_INSTANCES = [
-    'https://inv.riverside.rocks',
-    'https://vid.puffyan.us',
-    'https://invidious.snopyta.org',
-    'https://yewtu.be',
-    'https://inv.tux.pizza'
-]
-
-def get_random_instance():
-    return random.choice(INVIDIOUS_INSTANCES)
 
 def extract_video_id(url):
     """Extraer ID del video de forma robusta"""
@@ -39,187 +28,115 @@ def extract_video_id(url):
             return match.group(1)
     return None
 
-def get_video_info_invidious(video_id):
-    """Obtener información del video usando Invidious"""
-    for attempt in range(3):
-        try:
-            instance = get_random_instance()
-            api_url = f"{instance}/api/v1/videos/{video_id}"
-            
-            print(f"🔍 Intentando con instancia: {instance}")
-            
-            response = requests.get(api_url, timeout=15)
-            if response.status_code == 200:
-                data = response.json()
-                
-                # Obtener la mejor miniatura
-                thumbnails = data.get('videoThumbnails', [])
-                thumbnail_url = ''
-                if thumbnails:
-                    for thumb in thumbnails:
-                        if thumb.get('quality') in ['medium', 'high', 'standard']:
-                            thumbnail_url = thumb.get('url', '')
-                            break
-                    if not thumbnail_url and thumbnails:
-                        thumbnail_url = thumbnails[0].get('url', '')
-                
-                video_info = {
-                    'title': data.get('title', 'Sin título'),
-                    'description': data.get('description', ''),
-                    'duration': data.get('lengthSeconds', 0),
-                    'viewCount': data.get('viewCount', 0),
-                    'thumbnail': thumbnail_url,
-                    'success': True
-                }
-                
-                print(f"✅ Información obtenida correctamente de {instance}")
-                return video_info
-                
-        except Exception as e:
-            print(f"❌ Instancia {instance} falló: {str(e)}")
-            continue
-    
-    return None
-
-def get_download_url(video_id, format_type='video'):
-    """Obtener URL de descarga directa desde Invidious"""
-    for attempt in range(3):
-        try:
-            instance = get_random_instance()
-            
-            if format_type == 'video':
-                # URL para descarga de video (itag 18 = 360p MP4, itag 22 = 720p MP4)
-                download_url = f"{instance}/latest_version?id={video_id}&itag=18"
-            else:
-                # URL para descarga de audio (itag 140 = audio m4a)
-                download_url = f"{instance}/latest_version?id={video_id}&itag=140"
-            
-            print(f"🔗 Probando URL de descarga: {download_url}")
-            
-            # Verificar que la URL es accesible
-            response = requests.head(download_url, timeout=10, allow_redirects=True)
-            if response.status_code == 200:
-                print(f"✅ URL de descarga válida: {download_url}")
-                return download_url
-                
-        except Exception as e:
-            print(f"❌ URL de descarga falló: {str(e)}")
-            continue
-    
-    return None
-
 class DownloadThread(threading.Thread):
-    def __init__(self, video_id, format_type, download_id):
+    def __init__(self, url, format_type, download_id):
         threading.Thread.__init__(self)
-        self.video_id = video_id
+        self.url = url
         self.format_type = format_type  # 'video' o 'audio'
         self.download_id = download_id
         self.filename = None
         self.error = None
 
-    def progress_hook(self, current, total):
-        if total > 0:
-            progress = (current / total) * 100
-            download_progress[self.download_id] = {
-                'progress': progress,
-                'status': 'downloading',
-                'downloaded': current,
-                'total': total
-            }
-
-    def download_direct(self):
-        """Descarga directa usando Invidious"""
-        try:
-            # Obtener información del video primero para el título
-            info = get_video_info_invidious(self.video_id)
-            if not info:
-                info = {
-                    'title': f'video_{self.video_id}',
-                    'description': 'Video descargado desde YouTube'
-                }
-            
-            # Obtener URL de descarga
-            download_url = get_download_url(self.video_id, self.format_type)
-            if not download_url:
-                self.error = "No se pudo obtener URL de descarga. Intenta más tarde."
-                return False
-            
-            # Crear directorio de descargas
-            temp_dir = tempfile.gettempdir()
-            download_folder = os.path.join(temp_dir, 'youtube_downloads')
-            os.makedirs(download_folder, exist_ok=True)
-            
-            # Nombre del archivo seguro
-            safe_title = re.sub(r'[^\w\s-]', '', info.get('title', f'video_{self.video_id}'))
-            safe_title = re.sub(r'[-\s]+', '_', safe_title)
-            file_ext = 'mp4' if self.format_type == 'video' else 'm4a'
-            filename = f"{safe_title[:50]}_{self.video_id}.{file_ext}"
-            file_path = os.path.join(download_folder, filename)
-            
-            print(f"📥 Iniciando descarga desde: {download_url}")
-            
-            # Descargar el archivo
-            response = requests.get(download_url, stream=True, timeout=60)
-            response.raise_for_status()
-            
-            total_size = int(response.headers.get('content-length', 0))
-            downloaded = 0
-            
-            with open(file_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if total_size > 0:
-                            self.progress_hook(downloaded, total_size)
-                        else:
-                            # Progreso estimado basado en tamaño descargado
-                            progress_percent = min(95, (downloaded / (5 * 1024 * 1024)) * 100)  # Asume max 5MB
-                            download_progress[self.download_id] = {
-                                'progress': progress_percent,
-                                'status': 'downloading',
-                                'downloaded': downloaded,
-                                'total': 0
-                            }
-            
-            # Verificar que el archivo se descargó correctamente
-            if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
-                self.filename = filename
-                print(f"✅ Descarga completada: {filename} ({os.path.getsize(file_path)} bytes)")
-                return True
-            else:
-                self.error = "El archivo se descargó pero está vacío o corrupto"
-                return False
-            
-        except Exception as e:
-            self.error = f"Error en descarga: {str(e)}"
-            print(f"❌ Error en descarga: {str(e)}")
-            return False
+    def progress_callback(self, stream, chunk, bytes_remaining):
+        """Callback para el progreso de descarga"""
+        total_size = stream.filesize
+        bytes_downloaded = total_size - bytes_remaining
+        progress = (bytes_downloaded / total_size) * 100
+        
+        download_progress[self.download_id] = {
+            'progress': progress,
+            'status': 'downloading',
+            'downloaded': bytes_downloaded,
+            'total': total_size,
+            'speed': 'Calculando...',
+            'eta': 'Calculando...'
+        }
 
     def run(self):
         try:
             download_progress[self.download_id] = {
                 'progress': 0,
-                'status': 'starting',
+                'status': 'iniciando',
                 'error': None
             }
             
-            success = self.download_direct()
+            # Crear directorio temporal para descargas
+            temp_dir = tempfile.gettempdir()
+            download_folder = os.path.join(temp_dir, 'youtube_downloads')
+            os.makedirs(download_folder, exist_ok=True)
             
-            if success:
+            # Configurar YouTube object
+            yt = YouTube(self.url, on_progress_callback=self.progress_callback)
+            
+            # Obtener información básica
+            video_title = yt.title
+            safe_title = re.sub(r'[^\w\s-]', '', video_title)
+            safe_title = re.sub(r'[-\s]+', '_', safe_title)
+            
+            if self.format_type == 'video':
+                # Filtrar streams de video progresivo (video + audio)
+                streams = yt.streams.filter(progressive=True, file_extension='mp4')
+                
+                # Ordenar por resolución descendente
+                streams = streams.order_by('resolution').desc()
+                
+                if not streams:
+                    self.error = "No se encontraron streams de video disponibles"
+                    return
+                
+                # Seleccionar el stream de mayor resolución disponible
+                stream = streams.first()
+                file_ext = 'mp4'
+                
+            else:  # audio
+                # Filtrar streams de audio
+                streams = yt.streams.filter(only_audio=True, file_extension='mp4')
+                
+                if not streams:
+                    self.error = "No se encontraron streams de audio disponibles"
+                    return
+                
+                # Seleccionar el stream de audio de mayor calidad
+                stream = streams.order_by('abr').desc().first()
+                file_ext = 'mp4'  # pytube descarga audio como mp4
+            
+            # Generar nombre de archivo
+            filename = f"{safe_title[:50]}.{file_ext}"
+            file_path = os.path.join(download_folder, filename)
+            
+            download_progress[self.download_id] = {
+                'progress': 5,
+                'status': 'preparando_descarga',
+                'error': None
+            }
+            
+            # Descargar el archivo
+            print(f"📥 Descargando: {video_title}")
+            stream.download(output_path=download_folder, filename=filename)
+            
+            # Verificar que el archivo existe
+            if os.path.exists(file_path):
+                self.filename = filename
                 download_progress[self.download_id] = {
                     'progress': 100,
                     'status': 'completed',
-                    'filename': self.filename,
-                    'title': 'video_descargado'
+                    'filename': filename,
+                    'title': video_title
                 }
+                print(f"✅ Descarga completada: {filename}")
             else:
-                raise Exception(self.error or "No se pudo descargar el video")
+                self.error = "El archivo no se descargó correctamente"
+                raise Exception(self.error)
                 
+        except VideoUnavailable:
+            self.error = "El video no está disponible o fue eliminado"
+        except AgeRestrictedError:
+            self.error = "El video tiene restricción de edad y no se puede descargar"
         except Exception as e:
-            error_msg = str(e)
-            self.error = error_msg
-            
+            self.error = f"Error en la descarga: {str(e)}"
+            print(f"❌ Error: {str(e)}")
+        
+        if self.error:
             download_progress[self.download_id] = {
                 'progress': 0,
                 'status': 'error',
@@ -232,7 +149,7 @@ def index():
 
 @app.route('/api/video_info', methods=['POST'])
 def get_video_info():
-    """Obtener información del video usando Invidious"""
+    """Obtener información del video usando pytube"""
     data = request.get_json()
     url = data.get('url', '').strip()
     
@@ -243,80 +160,115 @@ def get_video_info():
     if not video_id:
         return jsonify({'success': False, 'error': 'URL de YouTube no válida'})
     
-    print(f"🎬 Obteniendo información para video ID: {video_id}")
-    
-    # Obtener información del video
-    video_info = get_video_info_invidious(video_id)
-    if not video_info:
-        # Información de respaldo
-        video_info = {
-            'title': f"Video {video_id}",
-            'description': 'Información obtenida mediante servicio alternativo',
-            'duration': 0,
-            'viewCount': 0,
-            'thumbnail': f'https://i.ytimg.com/vi/{video_id}/hqdefault.jpg',
-            'success': True
-        }
-    
-    # Formatos predefinidos (siempre disponibles)
-    predefined_formats = [
-        {'id': 'video', 'display': '🎥 Video MP4 (360p)'},
-        {'id': 'audio', 'display': '🎵 Audio M4A'}
-    ]
-    
-    video_formats = [
-        {'id': 'video', 'display': '🎥 Video MP4 (360p)', 'resolution': '360p', 'extension': 'mp4', 'has_audio': True}
-    ]
-    
-    audio_formats = [
-        {'id': 'audio', 'display': '🎵 Audio M4A', 'extension': 'm4a'}
-    ]
-    
-    return jsonify({
-        'success': True,
-        'title': video_info.get('title', 'Sin título'),
-        'duration': video_info.get('duration', 0),
-        'thumbnail': video_info.get('thumbnail', ''),
-        'description': str(video_info.get('description', ''))[:200] + '...',
-        'video_id': video_id,
-        'view_count': video_info.get('viewCount', 0),
-        'formats': {
-            'video': video_formats,
-            'audio': audio_formats,
-            'predefined': predefined_formats
-        },
-        'method': 'invidious',
-        'message': '✅ Información obtenida - Selecciona formato para descargar'
-    })
+    try:
+        # Obtener información básica del video
+        yt = YouTube(url)
+        
+        # Obtener miniatura de mayor calidad
+        thumbnail_url = f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg"
+        
+        # Verificar si existe la miniatura maxres
+        response = requests.head(thumbnail_url)
+        if response.status_code != 200:
+            thumbnail_url = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+        
+        # Obtener streams disponibles
+        video_streams = yt.streams.filter(progressive=True, file_extension='mp4')
+        audio_streams = yt.streams.filter(only_audio=True, file_extension='mp4')
+        
+        # Procesar formatos de video
+        video_formats = []
+        for stream in video_streams.order_by('resolution').desc():
+            if stream.resolution:
+                video_formats.append({
+                    'id': f"video_{stream.resolution}",
+                    'display': f"🎥 Video {stream.resolution} ({stream.mime_type.split('/')[1]})",
+                    'resolution': stream.resolution,
+                    'extension': 'mp4',
+                    'has_audio': True,
+                    'filesize': stream.filesize_mb
+                })
+        
+        # Procesar formatos de audio
+        audio_formats = []
+        for stream in audio_streams.order_by('abr').desc():
+            audio_formats.append({
+                'id': f"audio_{stream.abr}",
+                'display': f"🎵 Audio {stream.abr}",
+                'extension': 'm4a',
+                'filesize': stream.filesize_mb
+            })
+        
+        # Formatos predefinidos
+        predefined_formats = []
+        if video_formats:
+            predefined_formats.append({
+                'id': 'video_best', 
+                'display': '🎯 Mejor calidad de video disponible'
+            })
+        if audio_formats:
+            predefined_formats.append({
+                'id': 'audio_best',
+                'display': '🔊 Mejor calidad de audio disponible'
+            })
+        
+        return jsonify({
+            'success': True,
+            'title': yt.title,
+            'duration': yt.length,
+            'thumbnail': thumbnail_url,
+            'description': yt.description[:300] + '...' if yt.description else 'Sin descripción disponible',
+            'video_id': video_id,
+            'view_count': yt.views,
+            'formats': {
+                'video': video_formats,
+                'audio': audio_formats,
+                'predefined': predefined_formats
+            },
+            'method': 'pytube',
+            'message': '✅ Información obtenida correctamente'
+        })
+        
+    except VideoUnavailable:
+        return jsonify({'success': False, 'error': 'El video no está disponible o fue eliminado'})
+    except AgeRestrictedError:
+        return jsonify({'success': False, 'error': 'El video tiene restricción de edad'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Error al obtener información: {str(e)}'})
 
 @app.route('/api/start_download', methods=['POST'])
 def start_download():
     data = request.get_json()
     url = data.get('url', '')
-    format_id = data.get('format_id', 'video')
+    format_id = data.get('format_id', 'video_best')
     
     if not url:
         return jsonify({'success': False, 'error': 'URL requerida'})
     
-    video_id = extract_video_id(url)
-    if not video_id:
-        return jsonify({'success': False, 'error': 'URL de YouTube no válida'})
-    
     # Determinar tipo de formato
-    format_type = 'video' if format_id == 'video' else 'audio'
+    if format_id.startswith('video_'):
+        format_type = 'video'
+    elif format_id.startswith('audio_'):
+        format_type = 'audio'
+    elif format_id == 'video_best':
+        format_type = 'video'
+    elif format_id == 'audio_best':
+        format_type = 'audio'
+    else:
+        format_type = 'video'  # Por defecto
     
-    download_id = f"dl_{int(time.time())}_{video_id}"
+    download_id = f"dl_{int(time.time())}_{hash(url)}"
     
-    print(f"🚀 Iniciando descarga: {video_id} como {format_type}")
+    print(f"🚀 Iniciando descarga: {format_type}")
     
-    download_thread = DownloadThread(video_id, format_type, download_id)
+    download_thread = DownloadThread(url, format_type, download_id)
     download_thread.start()
     
     return jsonify({
         'success': True, 
         'download_id': download_id,
-        'message': f'Descarga de {format_type} iniciada',
-        'video_id': video_id
+        'message': 'Descarga iniciada',
+        'format_type': format_type
     })
 
 @app.route('/api/progress/<download_id>')
@@ -346,7 +298,7 @@ def download_file(download_id):
     if not os.path.exists(file_path):
         return jsonify({'success': False, 'error': 'Archivo no existe'})
     
-    # Verificar que el archivo no esté vacío
+    # Verificar tamaño del archivo
     file_size = os.path.getsize(file_path)
     if file_size == 0:
         return jsonify({'success': False, 'error': 'El archivo está vacío'})
@@ -372,9 +324,8 @@ def cancel_download(download_id):
 def get_status():
     return jsonify({
         'status': 'active',
-        'message': '✅ Servicio funcionando con descarga directa',
-        'instances_available': len(INVIDIOUS_INSTANCES),
-        'formats_available': ['video (360p MP4)', 'audio (M4A)']
+        'message': '✅ Servicio funcionando con pytube',
+        'version': 'Usando pytube para descargas de YouTube'
     })
 
 @app.route('/static/<path:filename>')
