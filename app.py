@@ -1,4 +1,5 @@
 import os
+import yt_dlp
 import requests
 from flask import Flask, render_template, request, jsonify, send_file
 import tempfile
@@ -6,8 +7,6 @@ import threading
 import time
 import re
 import random
-from pytube import YouTube
-from pytube.exceptions import VideoUnavailable, AgeRestrictedError
 import json
 
 app = Flask(__name__)
@@ -15,18 +14,29 @@ app.secret_key = 'your_secret_key_here'
 
 download_progress = {}
 
-# Lista de User-Agents para rotación
-USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/120.0.0.0'
-]
-
-def get_random_user_agent():
-    return random.choice(USER_AGENTS)
+# Configuración global para yt-dlp
+YDLP_OPTS = {
+    'quiet': True,
+    'no_warnings': False,
+    'ignoreerrors': False,
+    'extract_flat': False,
+    'restrictfilenames': True,
+    'socket_timeout': 30,
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['android', 'web'],
+            'player_skip': ['configs', 'webpage'],
+        }
+    },
+    'http_headers': {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+    }
+}
 
 def extract_video_id(url):
     """Extraer ID del video de forma robusta"""
@@ -42,78 +52,127 @@ def extract_video_id(url):
             return match.group(1)
     return None
 
-def get_thumbnail_url(video_id):
-    """Obtener URL de miniatura con verificación"""
-    thumbnail_qualities = [
-        f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg",
-        f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
-        f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg",
-        f"https://i.ytimg.com/vi/{video_id}/default.jpg"
+def get_video_info_with_retry(url, max_retries=3):
+    """Obtener información del video con múltiples estrategias"""
+    strategies = [
+        # Estrategia 1: Normal
+        {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': False,
+        },
+        # Estrategia 2: Minimalista
+        {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': False,
+            'extractor_args': {'youtube': {'player_client': ['android']}},
+        },
+        # Estrategia 3: Sin extractor args
+        {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': False,
+        }
     ]
     
-    for thumbnail_url in thumbnail_qualities:
-        try:
-            response = requests.head(thumbnail_url, timeout=5)
-            if response.status_code == 200:
-                return thumbnail_url
-        except:
-            continue
-    
-    return thumbnail_qualities[1]  # Fallback a hqdefault
-
-def get_video_info_with_retry(url, max_retries=3):
-    """Obtener información del video con reintentos"""
     for attempt in range(max_retries):
         try:
-            # Delay progresivo entre reintentos
-            if attempt > 0:
-                delay = 2 ** attempt  # 2, 4, 8 segundos
-                print(f"⏳ Reintento {attempt + 1} en {delay} segundos...")
-                time.sleep(delay)
+            strategy = strategies[attempt % len(strategies)]
+            ydl_opts = YDLP_OPTS.copy()
+            ydl_opts.update(strategy)
             
-            print(f"🔍 Intento {attempt + 1} para obtener información...")
+            # Rotar User-Agent
+            ydl_opts['http_headers']['User-Agent'] = get_random_user_agent()
             
-            # Crear objeto YouTube (pytube maneja sus propios headers internamente)
-            yt = YouTube(url)
+            print(f"🔍 Intento {attempt + 1} con estrategia {attempt % len(strategies) + 1}")
             
-            # Forzar la obtención de datos básicos
-            _ = yt.title  # Esto activa la descarga de metadata
-            _ = yt.streams  # Esto carga los streams disponibles
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                print(f"✅ Información obtenida exitosamente")
+                return info
+                
+        except yt_dlp.DownloadError as e:
+            error_msg = str(e)
+            print(f"❌ Intento {attempt + 1} falló: {error_msg}")
             
-            return yt
+            if "400" in error_msg:
+                print("🔄 Error 400, cambiando estrategia...")
+            elif "429" in error_msg:
+                print("🚫 Rate limit detectado, esperando...")
+                time.sleep(10)
+            elif "403" in error_msg:
+                print("🔒 Error 403, intentando con configuración diferente...")
             
-        except Exception as e:
-            print(f"❌ Intento {attempt + 1} falló: {str(e)}")
-            if "429" in str(e):
-                print("🚫 Rate limit detectado, esperando más tiempo...")
-                time.sleep(10)  # Espera más larga para rate limits
             if attempt == max_retries - 1:
                 raise e
-            continue
+                
+            time.sleep(2 ** attempt)  # Backoff exponencial
+            
+        except Exception as e:
+            print(f"❌ Intento {attempt + 1} falló con error inesperado: {str(e)}")
+            if attempt == max_retries - 1:
+                raise e
+            time.sleep(2 ** attempt)
     
     return None
 
+def get_random_user_agent():
+    """Generar User-Agent aleatorio"""
+    user_agents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    ]
+    return random.choice(user_agents)
+
+def get_thumbnail_url(video_id):
+    """Obtener URL de miniatura"""
+    qualities = ['maxresdefault', 'hqdefault', 'mqdefault', 'default']
+    for quality in qualities:
+        url = f"https://i.ytimg.com/vi/{video_id}/{quality}.jpg"
+        try:
+            if requests.head(url, timeout=5).status_code == 200:
+                return url
+        except:
+            continue
+    return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+
 class DownloadThread(threading.Thread):
-    def __init__(self, url, format_type, download_id):
+    def __init__(self, url, format_id, download_id):
         threading.Thread.__init__(self)
         self.url = url
-        self.format_type = format_type
+        self.format_id = format_id
         self.download_id = download_id
         self.filename = None
         self.error = None
 
-    def progress_callback(self, stream, chunk, bytes_remaining):
-        """Callback para el progreso de descarga"""
-        total_size = stream.filesize
-        if total_size:
-            bytes_downloaded = total_size - bytes_remaining
-            progress = (bytes_downloaded / total_size) * 100
+    def progress_hook(self, d):
+        if d['status'] == 'downloading':
+            progress = d.get('_percent_str', '0%').strip()
+            progress_clean = re.sub(r'\x1b\[[0-9;]*m', '', progress)
             
+            try:
+                progress_value = float(progress_clean.strip('%'))
+                download_progress[self.download_id] = {
+                    'progress': progress_value,
+                    'speed': d.get('_speed_str', 'N/A'),
+                    'eta': d.get('_eta_str', 'N/A'),
+                    'status': 'downloading'
+                }
+            except ValueError:
+                download_progress[self.download_id] = {
+                    'progress': 0,
+                    'status': 'downloading'
+                }
+                
+        elif d['status'] == 'finished':
             download_progress[self.download_id] = {
-                'progress': progress,
-                'status': 'downloading',
-                'downloaded': bytes_downloaded,
-                'total': total_size
+                'progress': 100,
+                'status': 'processing',
+                'filename': d.get('filename', '')
             }
 
     def run(self):
@@ -124,115 +183,82 @@ class DownloadThread(threading.Thread):
                 'error': None
             }
             
-            # Pequeño delay aleatorio antes de empezar
-            time.sleep(random.uniform(1, 3))
-            
-            # Crear directorio temporal para descargas
+            # Crear directorio temporal
             temp_dir = tempfile.gettempdir()
             download_folder = os.path.join(temp_dir, 'youtube_downloads')
             os.makedirs(download_folder, exist_ok=True)
             
-            # Obtener información del video con retry
-            yt = get_video_info_with_retry(self.url)
-            if not yt:
-                self.error = "No se pudo obtener información del video después de varios intentos"
-                return
+            # Configuración de descarga
+            ydl_opts = YDLP_OPTS.copy()
+            ydl_opts.update({
+                'outtmpl': os.path.join(download_folder, '%(title).100s.%(ext)s'),
+                'progress_hooks': [self.progress_hook],
+            })
             
-            # Configurar callback de progreso
-            yt.register_on_progress_callback(self.progress_callback)
-            
-            # Obtener información básica
-            video_title = yt.title
-            safe_title = re.sub(r'[^\w\s-]', '', video_title)
-            safe_title = re.sub(r'[-\s]+', '_', safe_title)
-            
-            download_progress[self.download_id] = {
-                'progress': 10,
-                'status': 'buscando_streams',
-                'error': None
-            }
-            
-            if self.format_type == 'video':
-                # Estrategia: primero buscar streams progresivos (video+audio)
-                streams = yt.streams.filter(progressive=True, file_extension='mp4')
-                
-                if not streams:
-                    # Si no hay progresivos, buscar adaptativos y combinar
-                    video_streams = yt.streams.filter(adaptive=True, only_video=True, file_extension='mp4')
-                    audio_streams = yt.streams.filter(adaptive=True, only_audio=True)
-                    
-                    if video_streams and audio_streams:
-                        # Para simplificar, usar el mejor video disponible
-                        stream = video_streams.order_by('resolution').desc().first()
-                        print(f"⚠️ Usando stream adaptativo: {stream.resolution}")
-                    else:
-                        self.error = "No se encontraron streams de video disponibles"
-                        return
-                else:
-                    # Usar stream progresivo (recomendado)
-                    stream = streams.order_by('resolution').desc().first()
-                    print(f"✅ Stream progresivo encontrado: {stream.resolution}")
-                
-                file_ext = 'mp4'
-                
-            else:  # audio
-                # Filtrar streams de audio
-                streams = yt.streams.filter(only_audio=True)
-                
-                if not streams:
-                    self.error = "No se encontraron streams de audio disponibles"
-                    return
-                
-                # Seleccionar el stream de audio de mayor calidad
-                stream = streams.order_by('abr').desc().first()
-                file_ext = 'mp4'  # pytube descarga audio como mp4
-            
-            # Generar nombre de archivo
-            filename = f"{safe_title[:50]}.{file_ext}"
-            file_path = os.path.join(download_folder, filename)
-            
-            download_progress[self.download_id] = {
-                'progress': 20,
-                'status': 'preparando_descarga',
-                'error': None
-            }
-            
-            # Pequeño delay antes de descargar
-            time.sleep(random.uniform(1, 2))
-            
-            # Descargar el archivo
-            print(f"📥 Descargando: {video_title} - {stream}")
-            stream.download(output_path=download_folder, filename=filename)
-            
-            # Verificar que el archivo existe
-            if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
-                self.filename = filename
-                download_progress[self.download_id] = {
-                    'progress': 100,
-                    'status': 'completed',
-                    'filename': filename,
-                    'title': video_title
-                }
-                print(f"✅ Descarga completada: {filename} ({os.path.getsize(file_path)} bytes)")
+            # Configurar formato según selección
+            if self.format_id == 'best':
+                ydl_opts['format'] = 'best[height<=720]'
+            elif self.format_id == 'worst':
+                ydl_opts['format'] = 'worst'
+            elif self.format_id.startswith('audio'):
+                ydl_opts['format'] = 'bestaudio'
+                ydl_opts['postprocessors'] = [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }]
             else:
-                self.error = "El archivo no se descargó correctamente"
-                raise Exception(self.error)
+                # Formato específico de video
+                ydl_opts['format'] = 'best[height<=720]'
+            
+            # Rotar User-Agent para descarga
+            ydl_opts['http_headers']['User-Agent'] = get_random_user_agent()
+            
+            print(f"📥 Iniciando descarga con formato: {self.format_id}")
+            
+            # Intentar descarga con reintentos
+            max_retries = 2
+            for attempt in range(max_retries):
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(self.url, download=True)
+                        self.filename = ydl.prepare_filename(info)
+                        
+                        # Actualizar progreso a completado
+                        download_progress[self.download_id] = {
+                            'progress': 100,
+                            'status': 'completed',
+                            'filename': os.path.basename(self.filename),
+                            'title': info.get('title', 'video')
+                        }
+                        print(f"✅ Descarga completada: {self.filename}")
+                        break
+                        
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        print(f"🔄 Reintentando descarga... ({attempt + 1})")
+                        time.sleep(3)
+                        continue
+                    else:
+                        raise e
                 
-        except VideoUnavailable:
-            self.error = "El video no está disponible o fue eliminado"
-        except AgeRestrictedError:
-            self.error = "El video tiene restricción de edad y no se puede descargar"
         except Exception as e:
             error_msg = str(e)
-            if "429" in error_msg:
-                self.error = "YouTube está bloqueando las solicitudes. Por favor, espera unos minutos e intenta nuevamente."
-            elif "private" in error_msg.lower():
+            print(f"❌ Error en descarga: {error_msg}")
+            
+            if "400" in error_msg:
+                self.error = "Error de solicitud. La URL puede ser inválida o el video no está disponible."
+            elif "429" in error_msg:
+                self.error = "YouTube está bloqueando solicitudes. Espera unos minutos e intenta nuevamente."
+            elif "403" in error_msg:
+                self.error = "Acceso denegado. El video puede tener restricciones."
+            elif "Private" in error_msg:
                 self.error = "Este video es privado y no se puede descargar."
+            elif "Unavailable" in error_msg:
+                self.error = "El video no está disponible o fue eliminado."
             else:
                 self.error = f"Error en la descarga: {error_msg}"
-            print(f"❌ Error: {error_msg}")
-        
-        if self.error:
+            
             download_progress[self.download_id] = {
                 'progress': 0,
                 'status': 'error',
@@ -245,7 +271,7 @@ def index():
 
 @app.route('/api/video_info', methods=['POST'])
 def get_video_info():
-    """Obtener información del video con protección contra rate limiting"""
+    """Obtener información del video"""
     data = request.get_json()
     url = data.get('url', '').strip()
     
@@ -258,112 +284,96 @@ def get_video_info():
     
     try:
         # Obtener información con reintentos
-        yt = get_video_info_with_retry(url)
-        if not yt:
-            return jsonify({'success': False, 'error': 'No se pudo obtener información después de varios intentos. YouTube puede estar bloqueando las solicitudes.'})
+        video_info = get_video_info_with_retry(url)
+        if not video_info:
+            return jsonify({'success': False, 'error': 'No se pudo obtener información del video después de varios intentos'})
+        
+        # Procesar formatos disponibles
+        available_formats = video_info.get('formats', [])
+        video_formats = []
+        audio_formats = []
+        
+        for fmt in available_formats:
+            format_id = fmt.get('format_id', '')
+            resolution = fmt.get('format_note', 'Unknown')
+            ext = fmt.get('ext', 'unknown')
+            filesize = fmt.get('filesize')
+            vcodec = fmt.get('vcodec', 'none')
+            acodec = fmt.get('acodec', 'none')
+            
+            # Filtrar formatos inválidos
+            if not resolution or resolution.lower() == 'unknown':
+                continue
+            
+            # Formato de video (con video)
+            if vcodec != 'none' and vcodec is not None:
+                size_text = f" - {filesize / (1024*1024):.1f} MB" if filesize else ""
+                has_audio = acodec != 'none' and acodec is not None
+                audio_indicator = " 🔊" if has_audio else " 🔇"
+                
+                video_formats.append({
+                    'id': format_id,
+                    'display': f"{resolution} ({ext.upper()}){size_text}{audio_indicator}",
+                    'resolution': resolution,
+                    'extension': ext,
+                    'has_audio': has_audio,
+                    'filesize': filesize
+                })
+            
+            # Formatos de solo audio
+            elif acodec != 'none' and vcodec == 'none':
+                audio_formats.append({
+                    'id': format_id,
+                    'display': f"Audio only ({ext.upper()}) - {filesize / (1024*1024):.1f} MB" if filesize else f"Audio only ({ext.upper()})",
+                    'extension': ext
+                })
+        
+        # Ordenar formatos de video por resolución
+        def get_resolution_value(res):
+            try:
+                if 'p' in res.lower():
+                    return int(res.lower().replace('p', ''))
+                elif 'x' in res:
+                    return int(res.split('x')[1])
+                return 0
+            except:
+                return 0
+        
+        video_formats.sort(key=lambda x: get_resolution_value(x['resolution']), reverse=True)
+        
+        # Agregar opciones predefinidas
+        predefined_formats = [
+            {'id': 'best', 'display': '🎯 Mejor calidad (hasta 720p)'},
+            {'id': 'worst', 'display': '📉 Peor calidad (para evitar bloqueos)'},
+            {'id': 'audio', 'display': '🔊 Solo audio (MP3)'}
+        ]
         
         # Obtener miniatura
         thumbnail_url = get_thumbnail_url(video_id)
         
-        # Obtener streams disponibles (sin descargar)
-        try:
-            video_streams = yt.streams.filter(progressive=True, file_extension='mp4')
-            audio_streams = yt.streams.filter(only_audio=True)
-        except Exception as e:
-            return jsonify({'success': False, 'error': f'Error al obtener formatos: {str(e)}'})
-        
-        # Procesar formatos de video
-        video_formats = []
-        for stream in video_streams.order_by('resolution').desc()[:5]:  # Limitar a 5 opciones
-            if stream.resolution:
-                size_text = f" - {stream.filesize_mb:.1f} MB" if stream.filesize_mb else ""
-                video_formats.append({
-                    'id': f"video_{stream.resolution}",
-                    'display': f"🎥 Video {stream.resolution}{size_text}",
-                    'resolution': stream.resolution,
-                    'extension': 'mp4',
-                    'has_audio': True,
-                    'filesize': stream.filesize_mb
-                })
-        
-        # Procesar formatos de audio
-        audio_formats = []
-        for stream in audio_streams.order_by('abr').desc()[:3]:  # Limitar a 3 opciones
-            size_text = f" - {stream.filesize_mb:.1f} MB" if stream.filesize_mb else ""
-            audio_formats.append({
-                'id': f"audio_{stream.abr}",
-                'display': f"🎵 Audio {stream.abr}{size_text}",
-                'extension': 'm4a',
-                'filesize': stream.filesize_mb
-            })
-        
-        # Si no hay formatos, usar opciones básicas
-        if not video_formats and not audio_formats:
-            return jsonify({'success': False, 'error': 'No se encontraron formatos disponibles para este video'})
-        
-        if not video_formats:
-            video_formats = [{
-                'id': 'video_auto',
-                'display': '🎥 Video (calidad automática)',
-                'resolution': 'auto',
-                'extension': 'mp4',
-                'has_audio': True
-            }]
-        
-        if not audio_formats:
-            audio_formats = [{
-                'id': 'audio_auto',
-                'display': '🎵 Audio',
-                'extension': 'm4a'
-            }]
-        
-        # Formatos predefinidos
-        predefined_formats = []
-        if video_formats:
-            predefined_formats.append({
-                'id': 'video_best', 
-                'display': '🎯 Mejor calidad de video'
-            })
-        if len(video_formats) > 1:
-            # Agregar opción de calidad media si hay múltiples opciones
-            middle_index = min(1, len(video_formats) - 1)
-            predefined_formats.append({
-                'id': video_formats[middle_index]['id'],
-                'display': '📹 Calidad media'
-            })
-        if audio_formats:
-            predefined_formats.append({
-                'id': 'audio_best',
-                'display': '🔊 Mejor calidad de audio'
-            })
-        
         return jsonify({
             'success': True,
-            'title': yt.title,
-            'duration': yt.length,
+            'title': video_info.get('title', 'Sin título'),
+            'duration': video_info.get('duration', 0),
             'thumbnail': thumbnail_url,
-            'description': yt.description[:300] + '...' if yt.description else 'Sin descripción disponible',
-            'video_id': video_id,
-            'view_count': yt.views,
+            'description': video_info.get('description', '')[:500] + '...' if video_info.get('description') else 'Sin descripción',
             'formats': {
-                'video': video_formats,
-                'audio': audio_formats,
+                'video': video_formats[:8],  # Limitar a 8 formatos máximo
+                'audio': audio_formats[:4],  # Limitar a 4 formatos máximo
                 'predefined': predefined_formats
-            },
-            'method': 'pytube',
-            'message': '✅ Información obtenida correctamente'
+            }
         })
         
-    except VideoUnavailable:
-        return jsonify({'success': False, 'error': 'El video no está disponible o fue eliminado'})
-    except AgeRestrictedError:
-        return jsonify({'success': False, 'error': 'El video tiene restricción de edad'})
     except Exception as e:
         error_msg = str(e)
-        if "429" in error_msg:
-            return jsonify({'success': False, 'error': 'YouTube está bloqueando solicitudes. Espera 5-10 minutos e intenta nuevamente.'})
-        elif "private" in error_msg.lower():
-            return jsonify({'success': False, 'error': 'Este video es privado y no está disponible.'})
+        print(f"❌ Error general: {error_msg}")
+        
+        if "400" in error_msg:
+            return jsonify({'success': False, 'error': 'Error de solicitud. Verifica que la URL sea correcta.'})
+        elif "429" in error_msg:
+            return jsonify({'success': False, 'error': 'YouTube está bloqueando solicitudes. Espera 10-15 minutos.'})
+        elif "Unavailable" in error_msg:
+            return jsonify({'success': False, 'error': 'El video no está disponible o fue eliminado.'})
         else:
             return jsonify({'success': False, 'error': f'Error al obtener información: {error_msg}'})
 
@@ -371,43 +381,27 @@ def get_video_info():
 def start_download():
     data = request.get_json()
     url = data.get('url', '')
-    format_id = data.get('format_id', 'video_best')
+    format_id = data.get('format_id', 'best')
     
-    if not url:
-        return jsonify({'success': False, 'error': 'URL requerida'})
-    
-    # Determinar tipo de formato
-    if format_id.startswith('video_'):
-        format_type = 'video'
-    elif format_id.startswith('audio_'):
-        format_type = 'audio'
-    elif format_id == 'video_best':
-        format_type = 'video'
-    elif format_id == 'audio_best':
-        format_type = 'audio'
-    else:
-        format_type = 'video'
+    if not url or not format_id:
+        return jsonify({'success': False, 'error': 'URL y formato requeridos'})
     
     download_id = f"dl_{int(time.time())}_{hash(url)}"
     
-    print(f"🚀 Iniciando descarga: {format_type} ({format_id})")
-    
-    download_thread = DownloadThread(url, format_type, download_id)
+    download_thread = DownloadThread(url, format_id, download_id)
     download_thread.start()
     
     return jsonify({
         'success': True, 
         'download_id': download_id,
-        'message': 'Descarga iniciada',
-        'format_type': format_type
+        'message': 'Descarga iniciada'
     })
 
 @app.route('/api/progress/<download_id>')
 def get_progress(download_id):
     progress = download_progress.get(download_id, {
         'progress': 0,
-        'status': 'unknown',
-        'error': None
+        'status': 'unknown'
     })
     return jsonify(progress)
 
@@ -429,12 +423,6 @@ def download_file(download_id):
     if not os.path.exists(file_path):
         return jsonify({'success': False, 'error': 'Archivo no existe'})
     
-    file_size = os.path.getsize(file_path)
-    if file_size == 0:
-        return jsonify({'success': False, 'error': 'El archivo está vacío'})
-    
-    print(f"📤 Sirviendo archivo: {filename} ({file_size} bytes)")
-    
     if download_id in download_progress:
         del download_progress[download_id]
     
@@ -454,18 +442,9 @@ def cancel_download(download_id):
 def get_status():
     return jsonify({
         'status': 'active',
-        'message': '✅ Servicio funcionando con pytube',
-        'features': [
-            'Reintentos automáticos',
-            'Manejo de rate limits',
-            'Descarga progresiva',
-            'Múltiples formatos'
-        ]
+        'message': '✅ Servicio funcionando con yt-dlp mejorado',
+        'version': 'Configuración anti-bloqueos activada'
     })
-
-@app.route('/static/<path:filename>')
-def serve_static(filename):
-    return send_from_directory('static', filename)
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
