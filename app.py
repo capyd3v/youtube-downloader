@@ -15,61 +15,71 @@ app.secret_key = 'your_secret_key_here'
 
 download_progress = {}
 
-# Configuración avanzada para yt-dlp con anti-bot
+# Configuración ultra-conservadora para evitar bloqueos
 def get_ydl_opts_base():
-    """Configuración base mejorada con técnicas anti-bot"""
+    """Configuración base ultra-conservadora"""
     return {
         'quiet': True,
-        'no_warnings': False,
+        'no_warnings': True,
         'ignoreerrors': True,
         'extract_flat': False,
         'restrictfilenames': True,
-        'socket_timeout': 45,
-        'extractor_retries': 2,
+        'socket_timeout': 60,
+        'extractor_retries': 1,
         
-        # Configuración específica para YouTube anti-bot
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios'],
-                'player_skip': ['webpage', 'configs'],
-            }
-        },
+        # Eliminar extractor_args problemáticos
+        'extractor_args': {},
         
-        # Headers realistas con rotación
+        # Headers realistas
         'http_headers': get_random_headers(),
         
-        # Configuración de rate limiting más conservadora
-        'ratelimit': 512000,
-        'throttledratelimit': 256000,
+        # Rate limiting muy conservador
+        'ratelimit': 256000,
+        'throttledratelimit': 128000,
         
-        # Intentar evitar detección de bot
+        # Configuración de seguridad
         'no_check_certificate': False,
         'prefer_insecure': False,
-        'geo_bypass': True,
-        'geo_bypass_country': 'US',
+        'geo_bypass': False,
         
-        # Nuevas opciones para mejorar compatibilidad
-        'compat_opts': ['seperate-video-versions'],
+        # Deshabilitar características problemáticas
         'writeinfojson': False,
+        'writedescription': False,
+        'writeannotations': False,
+        'writethumbnail': False,
+        'writesubtitles': False,
+        'writeautomaticsub': False,
         'consoletitle': False,
+        
+        # Forzar formato simple
+        'format': 'worst[height<=360]',
     }
 
 def get_random_headers():
-    """Generar headers aleatorios realistas"""
+    """Generar headers más diversos y realistas"""
     user_agents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
-        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-        'Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1',
+        'Mozilla/5.0 (Linux; Android 14; SM-S911B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/121.0.0.0 Safari/537.36'
+    ]
+    
+    accept_languages = [
+        'en-US,en;q=0.9',
+        'es-ES,es;q=0.9,en;q=0.8',
+        'fr-FR,fr;q=0.9,en;q=0.8',
+        'de-DE,de;q=0.9,en;q=0.8',
+        'ja-JP,ja;q=0.9,en;q=0.8'
     ]
     
     return {
         'User-Agent': random.choice(user_agents),
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': random.choice(accept_languages),
         'Accept-Encoding': 'gzip, deflate, br',
         'Connection': 'keep-alive',
         'Upgrade-Insecure-Requests': '1',
@@ -78,6 +88,9 @@ def get_random_headers():
         'Sec-Fetch-Site': 'none',
         'Cache-Control': 'max-age=0',
         'DNT': '1',
+        'Sec-Ch-Ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"',
     }
 
 def extract_video_id(url):
@@ -95,11 +108,11 @@ def extract_video_id(url):
     return None
 
 def get_basic_video_info(video_id):
-    """Obtener información básica del video usando métodos alternativos"""
+    """Obtener información básica usando métodos externos"""
     try:
-        # Intentar con embed API
+        # Método 1: Usar oEmbed
         embed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
-        response = requests.get(embed_url, timeout=10, headers=get_random_headers())
+        response = requests.get(embed_url, timeout=15, headers=get_random_headers())
         
         if response.status_code == 200:
             data = response.json()
@@ -112,7 +125,23 @@ def get_basic_video_info(video_id):
     except:
         pass
     
-    # Información de fallback
+    try:
+        # Método 2: Usar noembed.com
+        noembed_url = f"https://noembed.com/embed?url=https://www.youtube.com/watch?v={video_id}"
+        response = requests.get(noembed_url, timeout=15, headers=get_random_headers())
+        
+        if response.status_code == 200:
+            data = response.json()
+            return {
+                'title': data.get('title', 'Video de YouTube'),
+                'thumbnail': data.get('thumbnail_url', f'https://i.ytimg.com/vi/{video_id}/hqdefault.jpg'),
+                'author': data.get('author_name', 'YouTube'),
+                'success': True
+            }
+    except:
+        pass
+    
+    # Información mínima de fallback
     return {
         'title': f"Video {video_id}",
         'thumbnail': f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
@@ -120,102 +149,37 @@ def get_basic_video_info(video_id):
         'success': True
     }
 
-def get_fallback_video_info(url):
-    """Método de fallback cuando todo lo demás falla"""
-    video_id = extract_video_id(url)
-    if not video_id:
-        raise Exception("No se pudo extraer ID del video")
-    
-    print("🔄 Usando método de fallback...")
-    return get_basic_video_info(video_id)
-
-def get_video_info_with_strategies(url, max_retries=3):
-    """Obtener información usando múltiples estrategias mejoradas"""
-    strategies = [
-        # Estrategia 1: Headers móviles
-        {
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android', 'ios'],
-                    'player_skip': ['webpage']
-                }
-            },
-        },
-        # Estrategia 2: Sin extractor args
-        {
-            'extractor_args': {},
-        },
-        # Estrategia 3: Solo información básica
-        {
-            'extract_flat': True,
+def get_video_info_simple(url):
+    """Método simple y directo para obtener información"""
+    try:
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'ignoreerrors': True,
+            'extract_flat': True,  # Solo metadata básica
+            'socket_timeout': 30,
+            'extractor_retries': 1,
+            'http_headers': get_random_headers(),
+            'ratelimit': 128000,
         }
-    ]
-    
-    last_error = None
-    
-    for attempt in range(max_retries):
-        try:
-            strategy_idx = attempt % len(strategies)
-            strategy = strategies[strategy_idx]
-            
-            ydl_opts = get_ydl_opts_base()
-            ydl_opts.update(strategy)
-            
-            # Rotar headers en cada intento
-            ydl_opts['http_headers'] = get_random_headers()
-            
-            # Aumentar timeout progresivamente
-            ydl_opts['socket_timeout'] = 30 + (attempt * 10)
-            
-            print(f"🎯 Intento {attempt + 1}, Estrategia {strategy_idx + 1}")
-            
-            # Delay exponencial entre intentos
-            if attempt > 0:
-                wait_time = min(2 ** attempt, 30)
-                print(f"⏳ Esperando {wait_time} segundos...")
-                time.sleep(wait_time)
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                
-                # Verificar que la información no sea None
-                if info is None:
-                    raise Exception("No se pudo obtener información del video")
-                
-                print("✅ Información obtenida exitosamente")
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if info and info.get('title'):
                 return info
-                
-        except yt_dlp.DownloadError as e:
-            last_error = str(e)
-            print(f"❌ Estrategia {strategy_idx + 1} falló: {last_error}")
-            
-            if "Sign in" in last_error or "bot" in last_error:
-                print("🤖 Detección de bot detectada, cambiando estrategia...")
-            elif "429" in last_error:
-                print("🚫 Rate limit detectado, esperando más tiempo...")
-                time.sleep(15)
-            elif "Unavailable" in last_error:
-                raise Exception("Video no disponible")
-            
-            if attempt == max_retries - 1:
-                return get_fallback_video_info(url)
-                
-        except Exception as e:
-            last_error = str(e)
-            print(f"❌ Error inesperado: {last_error}")
-            if attempt == max_retries - 1:
-                return get_fallback_video_info(url)
-            time.sleep(min(2 ** attempt, 30))
+    except:
+        pass
     
-    return get_fallback_video_info(url)
+    return None
 
 def get_thumbnail_url(video_id):
     """Obtener miniatura del video"""
-    qualities = ['maxresdefault', 'hqdefault', 'mqdefault', 'default']
+    qualities = ['maxresdefault', 'sddefault', 'hqdefault', 'mqdefault', 'default']
     for quality in qualities:
         url = f"https://i.ytimg.com/vi/{video_id}/{quality}.jpg"
         try:
-            if requests.head(url, timeout=5).status_code == 200:
+            response = requests.head(url, timeout=5, headers=get_random_headers())
+            if response.status_code == 200:
                 return url
         except:
             continue
@@ -264,89 +228,85 @@ class DownloadThread(threading.Thread):
                 'error': None
             }
             
+            # Delay aleatorio antes de empezar
+            time.sleep(random.uniform(2, 5))
+            
             # Crear directorio temporal
             temp_dir = tempfile.gettempdir()
             download_folder = os.path.join(temp_dir, 'youtube_downloads')
             os.makedirs(download_folder, exist_ok=True)
             
-            # Configuración de descarga
-            ydl_opts = get_ydl_opts_base()
-            ydl_opts.update({
-                'outtmpl': os.path.join(download_folder, '%(title).100s.%(ext)s'),
+            # Configuración ultra-conservadora para descarga
+            ydl_opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'ignoreerrors': True,
+                'restrictfilenames': True,
+                'socket_timeout': 60,
+                'extractor_retries': 1,
+                'http_headers': get_random_headers(),
+                'ratelimit': 256000,
+                'outtmpl': os.path.join(download_folder, '%(title).80s.%(ext)s'),
                 'progress_hooks': [self.progress_hook],
-            })
+            }
             
-            # Configurar formato
-            if self.format_id == 'best':
-                ydl_opts['format'] = 'best[height<=720]'
-            elif self.format_id == 'worst':
-                ydl_opts['format'] = 'worst'
-            elif self.format_id == 'audio':
+            # Configurar formato ultra-conservador
+            if self.format_id == 'audio':
                 ydl_opts['format'] = 'bestaudio'
                 ydl_opts['postprocessors'] = [{
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'mp3',
-                    'preferredquality': '192',
+                    'preferredquality': '128',
                 }]
-            else:
-                ydl_opts['format'] = 'best[height<=720]'
-            
-            # Rotar headers para descarga
-            ydl_opts['http_headers'] = get_random_headers()
+            elif self.format_id == 'best':
+                ydl_opts['format'] = 'best[height<=480]'
+            else:  # worst o por defecto
+                ydl_opts['format'] = 'worst[height<=360]'
             
             print(f"📥 Iniciando descarga con formato: {self.format_id}")
             
-            # Intentar descarga con estrategias
-            max_retries = 2
-            for attempt in range(max_retries):
-                try:
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        info = ydl.extract_info(self.url, download=True)
-                        
-                        # Verificar que la información no sea None
-                        if info is None:
-                            raise Exception("No se pudo obtener información del video para descargar")
-                        
-                        self.filename = ydl.prepare_filename(info)
-                        
-                        # Para audio, cambiar la extensión a mp3
-                        if self.format_id == 'audio' and self.filename:
-                            base_name = os.path.splitext(self.filename)[0]
-                            self.filename = base_name + '.mp3'
-                        
-                        download_progress[self.download_id] = {
-                            'progress': 100,
-                            'status': 'completed',
-                            'filename': os.path.basename(self.filename) if self.filename else 'video',
-                            'title': info.get('title', 'video')
-                        }
-                        print(f"✅ Descarga completada: {self.filename}")
-                        break
-                        
-                except Exception as e:
-                    if attempt < max_retries - 1:
-                        print(f"🔄 Reintentando descarga... ({attempt + 1})")
-                        # Cambiar estrategia de headers
-                        ydl_opts['http_headers'] = get_random_headers()
-                        time.sleep(5)
-                        continue
-                    else:
-                        raise e
+            # Solo un intento para evitar bloqueos
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(self.url, download=True)
+                    
+                    if info is None:
+                        raise Exception("No se pudo obtener información del video")
+                    
+                    self.filename = ydl.prepare_filename(info)
+                    
+                    # Para audio, cambiar la extensión
+                    if self.format_id == 'audio' and self.filename:
+                        base_name = os.path.splitext(self.filename)[0]
+                        self.filename = base_name + '.mp3'
+                    
+                    download_progress[self.download_id] = {
+                        'progress': 100,
+                        'status': 'completed',
+                        'filename': os.path.basename(self.filename) if self.filename else 'video',
+                        'title': info.get('title', 'video')
+                    }
+                    print(f"✅ Descarga completada: {self.filename}")
+                    
+            except Exception as e:
+                raise e
                 
         except Exception as e:
             error_msg = str(e)
             print(f"❌ Error en descarga: {error_msg}")
             
             if "Sign in" in error_msg or "bot" in error_msg:
-                self.error = "YouTube ha detectado actividad automatizada. Intenta con un video menos popular o espera unos minutos."
+                self.error = "YouTube ha detectado actividad automatizada. Intenta más tarde o con otro video."
             elif "429" in error_msg:
-                self.error = "Demasiadas solicitudes. Espera 10-15 minutos antes de intentar nuevamente."
+                self.error = "Límite de solicitudes excedido. Espera 15-30 minutos."
             elif "Unavailable" in error_msg:
                 self.error = "El video no está disponible."
+            elif "Private" in error_msg:
+                self.error = "El video es privado o no está disponible."
             elif "NoneType" in error_msg:
-                self.error = "No se pudo obtener información del video. El video puede estar restringido o no disponible."
+                self.error = "No se pudo acceder al video. Puede estar restringido."
             else:
-                self.error = f"Error en la descarga: {error_msg}"
+                self.error = f"Error: {error_msg}"
             
             download_progress[self.download_id] = {
                 'progress': 0,
@@ -360,7 +320,7 @@ def index():
 
 @app.route('/api/video_info', methods=['POST'])
 def get_video_info():
-    """Obtener información del video con manejo de errores mejorado"""
+    """Obtener información del video - enfoque minimalista"""
     data = request.get_json()
     url = data.get('url', '').strip()
     
@@ -371,147 +331,69 @@ def get_video_info():
     if not video_id:
         return jsonify({'success': False, 'error': 'URL de YouTube no válida'})
     
-    try:
-        # Intentar obtener información completa
-        video_info = get_video_info_with_strategies(url)
-        
-        # Verificar si es información básica de fallback
-        if not isinstance(video_info, dict) or video_info.get('_type') == 'url':
-            # Es información limitada de fallback
-            return jsonify({
-                'success': True,
-                'title': video_info.get('title', 'Video de YouTube'),
-                'duration': 0,
-                'thumbnail': video_info.get('thumbnail', f'https://i.ytimg.com/vi/{video_id}/hqdefault.jpg'),
-                'description': f'Video de {video_info.get("author", "YouTube")} - Información limitada disponible',
-                'formats': {
-                    'video': [
-                        {'id': 'worst', 'display': '📹 Calidad baja (recomendado)'},
-                        {'id': 'best', 'display': '🎥 Intentar descargar video'}
-                    ],
-                    'audio': [
-                        {'id': 'audio', 'display': '🔊 Solo audio MP3'}
-                    ],
-                    'predefined': [
-                        {'id': 'worst', 'display': '📉 Calidad baja (menos bloqueos)'},
-                        {'id': 'audio', 'display': '🔊 Solo audio (recomendado)'}
-                    ]
-                },
-                'message': '⚠️ Información limitada - Usa "Calidad baja" o "Solo audio" para mejor resultado'
-            })
-        
-        # Procesar información completa
-        available_formats = video_info.get('formats', [])
-        video_formats = []
-        audio_formats = []
-        
-        for fmt in available_formats:
-            format_id = fmt.get('format_id', '')
-            resolution = fmt.get('format_note', 'Unknown')
-            ext = fmt.get('ext', 'unknown')
-            filesize = fmt.get('filesize')
-            vcodec = fmt.get('vcodec', 'none')
-            acodec = fmt.get('acodec', 'none')
-            
-            if not resolution or resolution.lower() == 'unknown':
-                continue
-            
-            if vcodec != 'none' and vcodec is not None:
-                size_text = f" - {filesize / (1024*1024):.1f} MB" if filesize else ""
-                has_audio = acodec != 'none' and acodec is not None
-                audio_indicator = " 🔊" if has_audio else " 🔇"
-                
-                video_formats.append({
-                    'id': format_id,
-                    'display': f"{resolution} ({ext.upper()}){size_text}{audio_indicator}",
-                    'resolution': resolution,
-                    'extension': ext,
-                    'has_audio': has_audio,
-                    'filesize': filesize
-                })
-            
-            elif acodec != 'none' and vcodec == 'none':
-                size_text = f" - {filesize / (1024*1024):.1f} MB" if filesize else ""
-                audio_formats.append({
-                    'id': format_id,
-                    'display': f"Audio only ({ext.upper()}){size_text}",
-                    'extension': ext
-                })
-        
-        # Ordenar y limitar formatos
-        def get_resolution_value(res):
-            try:
-                if 'p' in res.lower():
-                    return int(res.lower().replace('p', ''))
-                return 0
-            except:
-                return 0
-        
-        video_formats.sort(key=lambda x: get_resolution_value(x['resolution']), reverse=True)
-        video_formats = video_formats[:6]
-        
-        # Formatos predefinidos
-        predefined_formats = [
-            {'id': 'best', 'display': '🎯 Mejor calidad (hasta 720p)'},
-            {'id': 'worst', 'display': '📉 Calidad baja (menos bloqueos)'},
-            {'id': 'audio', 'display': '🔊 Solo audio (MP3)'}
-        ]
-        
+    # Intentar método simple primero
+    simple_info = get_video_info_simple(url)
+    
+    if simple_info:
+        # Si obtenemos información simple, usarla
         thumbnail_url = get_thumbnail_url(video_id)
         
         return jsonify({
             'success': True,
-            'title': video_info.get('title', 'Sin título'),
-            'duration': video_info.get('duration', 0),
+            'title': simple_info.get('title', 'Video de YouTube'),
+            'duration': simple_info.get('duration', 0),
             'thumbnail': thumbnail_url,
-            'description': video_info.get('description', '')[:300] + '...' if video_info.get('description') else 'Sin descripción',
+            'description': simple_info.get('description', '')[:200] + '...' if simple_info.get('description') else 'Descripción no disponible',
             'formats': {
-                'video': video_formats,
-                'audio': audio_formats[:3],
-                'predefined': predefined_formats
+                'video': [
+                    {'id': 'worst', 'display': '📹 Calidad baja 360p (recomendado)'},
+                    {'id': 'best', 'display': '🎥 Calidad media 480p'}
+                ],
+                'audio': [
+                    {'id': 'audio', 'display': '🔊 Solo audio MP3'}
+                ],
+                'predefined': [
+                    {'id': 'worst', 'display': '📉 Calidad baja (más estable)'},
+                    {'id': 'audio', 'display': '🔊 Solo audio (menos bloqueos)'}
+                ]
             },
-            'message': '✅ Información obtenida - Recomendado: usar "Calidad baja" para menos bloqueos'
+            'message': '✅ Información básica obtenida - Usa formatos simples para mejor resultado'
         })
-        
-    except Exception as e:
-        error_msg = str(e)
-        print(f"❌ Error general: {error_msg}")
-        
-        # Usar información de fallback
-        basic_info = get_fallback_video_info(url)
+    else:
+        # Fallback a información básica externa
+        basic_info = get_basic_video_info(video_id)
         
         return jsonify({
             'success': True,
             'title': basic_info['title'],
             'duration': 0,
             'thumbnail': basic_info['thumbnail'],
-            'description': f'Video de {basic_info["author"]} - Información limitada por restricciones de YouTube',
+            'description': f'Video de {basic_info["author"]} - Información limitada disponible',
             'formats': {
                 'video': [
-                    {'id': 'worst', 'display': '📹 Calidad baja (recomendado)'},
-                    {'id': 'best', 'display': '🎥 Intentar descargar video'}
+                    {'id': 'worst', 'display': '📹 Calidad baja 360p (recomendado)'}
                 ],
                 'audio': [
-                    {'id': 'audio', 'display': '🔊 Solo audio MP3'}
+                    {'id': 'audio', 'display': '🔊 Solo audio MP3 (recomendado)'}
                 ],
                 'predefined': [
-                    {'id': 'worst', 'display': '📉 Calidad baja (menos bloqueos)'},
-                    {'id': 'audio', 'display': '🔊 Solo audio (recomendado)'}
+                    {'id': 'worst', 'display': '📉 Calidad baja'},
+                    {'id': 'audio', 'display': '🔊 Solo audio'}
                 ]
             },
-            'message': '⚠️ Información limitada - Usa "Calidad baja" o "Solo audio" para mejor resultado'
+            'message': '⚠️ Información limitada - Recomendado: usar "Solo audio" para menos bloqueos'
         })
 
 @app.route('/api/start_download', methods=['POST'])
 def start_download():
     data = request.get_json()
     url = data.get('url', '')
-    format_id = data.get('format_id', 'worst')
+    format_id = data.get('format_id', 'audio')  # Por defecto audio ahora
     
     if not url or not format_id:
         return jsonify({'success': False, 'error': 'URL y formato requeridos'})
     
-    download_id = f"dl_{int(time.time())}_{hash(url)}"
+    download_id = f"dl_{int(time.time())}_{random.randint(1000, 9999)}"
     
     download_thread = DownloadThread(url, format_id, download_id)
     download_thread.start()
@@ -519,7 +401,7 @@ def start_download():
     return jsonify({
         'success': True, 
         'download_id': download_id,
-        'message': 'Descarga iniciada'
+        'message': 'Descarga iniciada (puede tomar unos momentos)'
     })
 
 @app.route('/api/progress/<download_id>')
@@ -546,15 +428,13 @@ def download_file(download_id):
     file_path = os.path.join(download_folder, filename)
     
     if not os.path.exists(file_path):
-        # Intentar encontrar el archivo con diferentes extensiones
-        found_file = None
+        # Buscar archivo con nombre similar
+        base_name = os.path.splitext(filename)[0]
         for file in os.listdir(download_folder):
-            if file.startswith(os.path.splitext(filename)[0]):
-                found_file = file
+            if file.startswith(base_name):
+                file_path = os.path.join(download_folder, file)
+                filename = file
                 break
-        
-        if found_file:
-            file_path = os.path.join(download_folder, found_file)
         else:
             return jsonify({'success': False, 'error': 'Archivo no existe'})
     
@@ -577,11 +457,12 @@ def cancel_download(download_id):
 def get_status():
     return jsonify({
         'status': 'active',
-        'message': '✅ Servicio con protección anti-bot',
+        'message': '🎯 Servicio optimizado para evitar bloqueos',
         'recommendations': [
-            'Usa "Calidad baja" para menos bloqueos',
-            'Videos menos populares funcionan mejor',
-            'Si falla, espera 10 minutos'
+            'Usa "Solo audio" para menos bloqueos',
+            'Videos cortos funcionan mejor',
+            'Espera entre descargas',
+            'Si falla, intenta con otro video'
         ]
     })
 
@@ -589,11 +470,11 @@ def get_status():
 def get_tips():
     return jsonify({
         'tips': [
-            "🎯 Usa 'Calidad baja' para evitar detección de bot",
-            "📹 Videos con menos vistas funcionan mejor",
-            "⏰ Espera entre descargas",
-            "🔊 El formato audio tiene menos restricciones",
-            "💡 Si falla, intenta con otro video"
+            "🎧 PRIORIDAD: Usa 'Solo audio' - tiene menos restricciones",
+            "📹 Usa 'Calidad baja' para videos - más estable",
+            "⏰ Espera 5-10 minutos entre descargas",
+            "🔍 Videos con menos vistas funcionan mejor",
+            "🔄 Si falla, no reintentes inmediatamente"
         ]
     })
 
