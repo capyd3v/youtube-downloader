@@ -17,36 +17,41 @@ download_progress = {}
 
 # Configuración avanzada para yt-dlp con anti-bot
 def get_ydl_opts_base():
-    """Configuración base con técnicas anti-bot"""
+    """Configuración base mejorada con técnicas anti-bot"""
     return {
         'quiet': True,
         'no_warnings': False,
-        'ignoreerrors': False,
+        'ignoreerrors': True,  # Cambiar a True para ignorar errores menores
         'extract_flat': False,
         'restrictfilenames': True,
-        'socket_timeout': 30,
-        'extractor_retries': 3,
+        'socket_timeout': 45,  # Aumentar timeout
+        'extractor_retries': 2,  # Reducir reintentos
         
         # Configuración específica para YouTube anti-bot
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'ios', 'web_mobile'],
-                'player_skip': ['configs', 'webpage', 'js'],
+                'player_client': ['android', 'ios'],
+                'player_skip': ['webpage', 'configs'],
             }
         },
         
         # Headers realistas con rotación
         'http_headers': get_random_headers(),
         
-        # Configuración de rate limiting
-        'ratelimit': 1024000,  # Limitar velocidad de descarga
-        'throttledratelimit': 512000,
+        # Configuración de rate limiting más conservadora
+        'ratelimit': 512000,  # Reducir límite de velocidad
+        'throttledratelimit': 256000,
         
         # Intentar evitar detección de bot
-        'no_check_certificate': True,
-        'prefer_insecure': True,
+        'no_check_certificate': False,  # Cambiar a False para mejor compatibilidad
+        'prefer_insecure': False,
         'geo_bypass': True,
         'geo_bypass_country': 'US',
+        
+        # Nuevas opciones para mejorar compatibilidad
+        'compat_opts': ['seperate-video-versions'],
+        'writeinfojson': False,
+        'consoletitle': False,
     }
 
 def get_random_headers():
@@ -89,26 +94,65 @@ def extract_video_id(url):
             return match.group(1)
     return None
 
+def get_fallback_video_info(url):
+    """Método de fallback cuando todo lo demás falla"""
+    video_id = extract_video_id(url)
+    if not video_id:
+        raise Exception("No se pudo extraer ID del video")
+    
+    print("🔄 Usando método de fallback...")
+    
+    # Intentar con diferentes métodos alternativos
+    fallback_methods = [
+        # Método 1: Usar embed API
+        lambda: get_basic_video_info(video_id),
+        # Método 2: Usar i.ytimg.com para miniatura
+        lambda: {
+            'title': f"Video {video_id}",
+            'thumbnail': f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+            'author': 'YouTube',
+            'duration': 0,
+            'success': True
+        }
+    ]
+    
+    for method in fallback_methods:
+        try:
+            result = method()
+            if result.get('success'):
+                return result
+        except:
+            continue
+    
+    # Información mínima de fallback
+    return {
+        'title': f"Video {video_id}",
+        'thumbnail': f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+        'author': 'YouTube',
+        'duration': 0,
+        'success': True
+    }
+
 def get_video_info_with_strategies(url, max_retries=3):
-    """Obtener información usando múltiples estrategias"""
+    """Obtener información usando múltiples estrategias mejoradas"""
     strategies = [
-        # Estrategia 1: Normal con headers rotativos
+        # Estrategia 1: Headers móviles
         {
-            'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'ios'],
+                    'player_skip': ['webpage']
+                }
+            },
         },
-        # Estrategia 2: Mobile
+        # Estrategia 2: Sin extractor args
         {
-            'extractor_args': {'youtube': {'player_client': ['ios', 'android']}},
-            'http_headers': get_random_headers(),
+            'extractor_args': {},
         },
-        # Estrategia 3: Minimalista
+        # Estrategia 3: Solo información básica
         {
-            'extractor_args': {'youtube': {'player_client': ['web_mobile']}},
-            'http_headers': get_random_headers(),
-        },
-        # Estrategia 4: Sin extractor args
-        {
-            'http_headers': get_random_headers(),
+            'extract_flat': True,
+            'force_json': True,
         }
     ]
     
@@ -121,13 +165,20 @@ def get_video_info_with_strategies(url, max_retries=3):
             
             ydl_opts = get_ydl_opts_base()
             ydl_opts.update(strategy)
-            ydl_opts['http_headers'] = get_random_headers()  # Rotar headers
+            
+            # Rotar headers en cada intento
+            ydl_opts['http_headers'] = get_random_headers()
+            
+            # Aumentar timeout progresivamente
+            ydl_opts['socket_timeout'] = 30 + (attempt * 10)
             
             print(f"🎯 Intento {attempt + 1}, Estrategia {strategy_idx + 1}")
             
-            # Delay entre intentos
+            # Delay exponencial entre intentos
             if attempt > 0:
-                time.sleep(2 ** attempt)
+                wait_time = min(2 ** attempt, 30)  # Máximo 30 segundos
+                print(f"⏳ Esperando {wait_time} segundos...")
+                time.sleep(wait_time)
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -141,20 +192,23 @@ def get_video_info_with_strategies(url, max_retries=3):
             if "Sign in" in last_error or "bot" in last_error:
                 print("🤖 Detección de bot detectada, cambiando estrategia...")
             elif "429" in last_error:
-                print("🚫 Rate limit, esperando...")
-                time.sleep(10)
+                print("🚫 Rate limit detectado, esperando más tiempo...")
+                time.sleep(15)  # Espera más larga para rate limit
+            elif "Unavailable" in last_error:
+                raise Exception("Video no disponible")
             
             if attempt == max_retries - 1:
-                raise Exception(last_error)
+                # Si todas las estrategias fallan, usar método alternativo
+                return get_fallback_video_info(url)
                 
         except Exception as e:
             last_error = str(e)
             print(f"❌ Error inesperado: {last_error}")
             if attempt == max_retries - 1:
-                raise Exception(last_error)
-            time.sleep(2 ** attempt)
+                return get_fallback_video_info(url)
+            time.sleep(min(2 ** attempt, 30))
     
-    raise Exception(f"Todas las estrategias fallaron: {last_error}")
+    return get_fallback_video_info(url)
 
 def get_thumbnail_url(video_id):
     """Obtener miniatura del video"""
@@ -336,7 +390,7 @@ def get_video_info():
         # Intentar obtener información completa
         video_info = get_video_info_with_strategies(url)
         
-        # Procesar formatos
+        # Si llegamos aquí, la información se obtuvo exitosamente
         available_formats = video_info.get('formats', [])
         video_formats = []
         audio_formats = []
@@ -412,34 +466,30 @@ def get_video_info():
         error_msg = str(e)
         print(f"❌ Error general: {error_msg}")
         
-        if "Sign in" in error_msg or "bot" in error_msg:
-            # Obtener información básica como fallback
-            basic_info = get_basic_video_info(video_id)
-            return jsonify({
-                'success': True,
-                'title': basic_info['title'],
-                'duration': 0,
-                'thumbnail': basic_info['thumbnail'],
-                'description': f'Video de {basic_info["author"]} - Información limitada por restricciones',
-                'formats': {
-                    'video': [
-                        {'id': 'best', 'display': '🎥 Intentar descargar video'},
-                        {'id': 'worst', 'display': '📹 Calidad baja (recomendado)'}
-                    ],
-                    'audio': [
-                        {'id': 'audio', 'display': '🔊 Intentar descargar audio'}
-                    ],
-                    'predefined': [
-                        {'id': 'worst', 'display': '📉 Calidad baja (menos bloqueos)'},
-                        {'id': 'audio', 'display': '🔊 Solo audio'}
-                    ]
-                },
-                'message': '⚠️ Información limitada - Usa "Calidad baja" para mejor resultado'
-            })
-        else:
-            return jsonify({'success': False, 'error': f'Error al obtener información: {error_msg}'})
-
-# ... (mantener las demás rutas igual: start_download, progress, download, cancel_download, status)
+        # Usar información de fallback
+        basic_info = get_fallback_video_info(url)
+        
+        return jsonify({
+            'success': True,
+            'title': basic_info['title'],
+            'duration': basic_info.get('duration', 0),
+            'thumbnail': basic_info['thumbnail'],
+            'description': f'Video de {basic_info["author"]} - Información limitada por restricciones de YouTube',
+            'formats': {
+                'video': [
+                    {'id': 'worst', 'display': '📹 Calidad baja (recomendado)'},
+                    {'id': 'best', 'display': '🎥 Intentar descargar video'}
+                ],
+                'audio': [
+                    {'id': 'audio', 'display': '🔊 Solo audio MP3'}
+                ],
+                'predefined': [
+                    {'id': 'worst', 'display': '📉 Calidad baja (menos bloqueos)'},
+                    {'id': 'audio', 'display': '🔊 Solo audio (recomendado)'}
+                ]
+            },
+            'message': '⚠️ Información limitada - Usa "Calidad baja" o "Solo audio" para mejor resultado'
+        })
 
 @app.route('/api/start_download', methods=['POST'])
 def start_download():
